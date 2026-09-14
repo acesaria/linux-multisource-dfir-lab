@@ -184,3 +184,94 @@ automatic reasoning; ordinary tables, manual records and simple counting suffice
 - Run focused checks appropriate to the diff; stop when they pass. Handoff in
   at most 12 lines: checkout/revision/dirty state, artifacts, checks actually run,
   limitations, next action and exact human acceptance. Defer optional work.
+
+## Investigation results contract
+
+Every completed investigation produces four tables:
+
+1. Reconstructed chronology.
+2. Claim Coverage and Source Support.
+3. Multi-Source Contribution.
+4. Explored Footprint Inventory.
+
+The examples previously used to design these tables are fictional and must never
+be copied as measured results.
+
+### Findings
+
+Record findings separately from expected scenario claims.
+
+Each finding contains:
+
+- `claim_id`
+- `source`
+- `status`
+- `locator`
+- `observation`
+- `limitation`
+
+Allowed statuses are:
+
+- `supported`
+- `partial`
+- `unsupported`
+- `not_applicable`
+- `not_examined`
+- `tool_failure`
+
+`source` identifies the evidence origin, such as `disk`, `timeline`, or `ram`.
+Claims themselves are source-neutral. Any source may contain relevant traces for
+any claim.
+
+### Evidence independence
+
+Disk, timeline, and RAM remain separate result columns. A timeline rendering of
+the same underlying filesystem record is not automatically independent
+corroboration.
+
+Two tools parsing the same record do not create two independent sources.
+
+A combined conclusion is jointly sufficient only when complementary evidence from
+different origins is required and the reasoning is explicitly stated.
+
+### Recovery outcomes
+
+Distinguish among:
+
+- content recovered
+- partial content recovered
+- metadata or name trace only
+- no result in examined scope
+- tool failure
+- not attempted
+
+Do not interpret absence of evidence as proof of absence, deletion, or failed
+execution.
+
+### Metrics
+
+Use simple claim-support and observability summaries:
+
+- supported claims by source
+- partial claims by source
+- unsupported claims
+- not-examined claims
+- tool failures
+- corroborated claims
+- jointly sufficient claims
+- descriptive recovered-footprint counts
+
+Call these support or observability results. Do not call them universal accuracy,
+universal recall, or general detection rates.
+
+For a stated source and denominator:
+
+```text
+support rate =
+supported claims / claims investigated
+```
+
+Always state the denominator. Report `not_examined` separately.
+
+Do not calculate global precision unless a specific forensic technique produces a
+complete candidate list and a clear matching rule.
