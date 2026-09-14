@@ -1,0 +1,4 @@
+# Local host configuration for Codex-managed worktrees.
+# Evidence, environments, private keys and large generated files stay in place.
+config.yaml
+.github/copilot-instructions.md

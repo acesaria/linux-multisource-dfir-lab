@@ -76,16 +76,11 @@ shared/known_hashes/*
 .claude/worktrees/
 
 # Local working notes and editor/assistant configuration (not part of the codebase)
-AGENTS.md
-CLAUDE.md
 General-Context.md
 .claudeignore
 .claude/
 .github/copilot-instructions.md
 docs/archive/
-
-# Local ICM workspace
-/ai/
 
 # Claude runtime state
 /.claude/worktrees/
@@ -93,3 +88,4 @@ docs/archive/
 # Optional local agent configuration
 /.agents/
 /.codex/agents/
+.aider*

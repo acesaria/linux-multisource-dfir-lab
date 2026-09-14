@@ -12,6 +12,26 @@ The project is research infrastructure, not a production SIEM, EDR, malware
 sandbox, live-response platform, automatic detector, or automatic
 reconstruction system.
 
+## Project goal and completion
+
+Explain what controlled Linux attacks can be reconstructed from acquired disk,
+timeline views and RAM, and what combining them establishes. Automation supports
+scenario execution and acquisition; forensic interpretation is manual.
+
+The completion target is reviewed, reproducible results for all planned thesis
+scenarios (Father, ptrace, Diamorphine and BadBPF), using the four locked tables,
+with source locators, claim support, recovery outcomes and limitations. The thesis
+is brought to completion from that complete results package. The user estimates
+approximately one more month of work from 10 September 2026; this supersedes the
+previous two-case September milestone as the overall completion target.
+
+Methodology is definitively approved in
+[RESULTS_PREVIEW.md](investigations/father/RESULTS_PREVIEW.md). That file is
+read-only. Its four tables are the target; example values are fictional.
+Metric-selection debate is closed. Deletion recovery is an active task, including
+journal reconstruction and targeted carving of unallocated space, integrated
+through standard commands and small notebook cells.
+
 ## Current repository surface
 
 The CLI exposes `init`, `setup`, `build`, `run`, and `destroy`. `build` publishes
@@ -29,8 +49,8 @@ scenario, acquires memory while the VM is on, shuts the VM down, acquires disk,
 and then stops. Investigation-time tools produce only the outputs the analyst
 needs; cross-source interpretation and conclusions are human work.
 
-Current runs use manifest schema v3 and are recorded as `vanilla`. There is no
-runtime selector for a hardened security profile. Distro definitions exist for
+Fresh runs include explicit scenario claims and are recorded as `vanilla`.
+There is no runtime selector for a hardened security profile. Distro definitions exist for
 Ubuntu 22.04, Ubuntu 24.04, and Debian 13, but Ubuntu 22.04 is the current
 deep-analysis platform. Broader replication and optional scenarios must not
 delay the minimum thesis deliverables.
@@ -40,15 +60,43 @@ delay the minimum thesis deliverables.
 Each run is rooted under `shared/experiments/<run_id>/`. An acquired run keeps:
 
 ```text
-manifest.json                         run identity, lifecycle status, revision, sidecar index
-command_log.jsonl                     append-only scenario operations and commands
+manifest.json                         platform, revision, snapshot, inputs, claims, timestamps
+command_log.jsonl                     append-only commands and validations with stable IDs
 terminal_transcript.txt               human-readable scenario terminal record
-dumps/acquisition.json                acquisition commands, hashes, verification, image metadata
+dumps/acquisition.json                compact RAM and logical-disk acquisition metadata
+dumps/acquisition.log                 acquisition commands and tool diagnostics
 ```
 
-The root manifest is a small lifecycle index, and the acquisition sidecar is the
-authority for acquisition provenance. A successful `--no-acquire` run keeps the
-root records but no acquisition sidecar; it validates only the scenario and is
+Each runner declares `get_scenario_claims()`. Claims contain only `id`,
+`statement`, `basis`, `basis_type` and `validation_limit`. Their basis references
+stable command-log IDs (`command_log.jsonl#record_id`), copied run inputs or
+manifest facts (`manifest.json#scenario_facts.<name>`). They are published only
+after successful scenario validation; a failed scenario retains `claims: []`.
+They describe expected effects, not independently verified final-state truth.
+An acquisition failure retains these claims and any completed acquisition
+metadata. `scenario_facts` holds runtime observations such as PIDs and endpoints.
+
+The five run timestamps use UTC with six fractional digits. RAM start/end times
+bracket `virsh dump --memory-only`, excluding version probing and file hashing;
+the acquisition record carries the same values. Durations use a monotonic clock.
+Disk timing covers conversion through EWF verification. Run completion is
+recorded after cleanup.
+
+In `dumps/acquisition.json`, memory SHA-256 and size describe the captured file.
+Disk SHA-256 and size describe the **logical disk across all EWF segments**:
+`path` names the first segment, `segments` lists the set, and `hash_scope` is
+`logical_disk`. The digest is recomputed by `ewfverify -d sha256`; it is not the
+hash of the `.E01` container file. Individual segments are not separately hashed.
+Python uses SHA-256 exclusively; libewf's internal MD5 calculation is the sole
+exception, and no MD5 field is serialized. Tool versions are keyed by tool name.
+
+Both JSON manifests use two-space indentation and contain no terminal streams.
+Acquisition diagnostics go to `dumps/acquisition.log`; loose `hashes.txt` and
+per-tool JSON status files are no longer generated. Unattempted acquisitions are
+`null`; incomplete records retain their timing, actual subprocess exit status,
+and a short error. A zero exit status with an error is a failed output-validation
+step, not a successful acquisition. The acquisition sidecar is the authority for
+acquisition provenance. A successful `--no-acquire` run keeps the root records but no acquisition sidecar; it validates only the scenario and is
 not a complete forensic experiment.
 
 Accepted evidence and raw exports are immutable. Other generated caches may be
@@ -175,10 +223,11 @@ clone therefore starts without them, by design.
 
 ## Documentation
 
-- `ai/archive/METHODOLOGY.md` defines the thesis and investigation method, including the
-  evidence-status vocabulary and the fixed result-reporting contract.
-- `docs/investigations/` holds the accepted case summaries, the source notebooks
-  and the single cross-case comparative table.
+- [Investigation method](docs/INVESTIGATION_METHOD.md) defines the current narrative-first approach.
+- [Father investigation](investigations/father/README.md) is the active unified notebook.
+- `docs/investigations/` preserves historical case records; its old metric
+  definitions do not govern new investigations.
+- [Agent entry](AGENTS.md) and [ICM routing](ai/CONTEXT.md) are tracked for local and online review.
 - `scenarios/<id>/README.md` documents each controlled treatment's behaviour.
 - Named investigation documents apply only to their cited immutable runs.
 
