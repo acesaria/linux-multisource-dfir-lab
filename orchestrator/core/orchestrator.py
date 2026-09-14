@@ -42,7 +42,9 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
+import traceback
 from typing import Any, TypeAlias
 
 from orchestrator.core.config import (
@@ -61,6 +63,8 @@ from orchestrator.core.provenance import command_output, file_sha256, utc_now
 from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics import Dumper
+from orchestrator.forensics.dumper import AcquisitionManifest, acquisition_record
+from scenarios.command_log import ScenarioClaim
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
 from orchestrator.forensics.plaso_runner import (
     default_linux_filter,
@@ -69,6 +73,7 @@ from orchestrator.forensics.plaso_runner import (
 from scenarios.interactive_shell.runner import (
     SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO,
     run_interactive_shell,
+    get_scenario_claims as interactive_shell_claims,
 )
 from scenarios.kernel_diamorphine import runner as diamorphine
 from scenarios.kernel_ebpf_badbpf import runner as badbpf
@@ -89,6 +94,7 @@ class PreparedScenario:
 
     artifact_names: tuple[str, ...]
     execute: ScenarioExecutor
+    get_claims: Callable[[], list[ScenarioClaim]]
     # Raises when the published build no longer matches its recipe.
     check_record: Callable[[dict], None] | None
 
@@ -191,21 +197,25 @@ PREPARED_SCENARIOS: dict[str, PreparedScenario] = {
     father.SCENARIO_ID: PreparedScenario(
         artifact_names=(father.ARTIFACT_NAME,),
         execute=_run_father,
+        get_claims=father.get_scenario_claims,
         check_record=None,
     ),
     ptrace.SCENARIO_ID: PreparedScenario(
         artifact_names=ptrace.ARTIFACT_NAMES,
         execute=_run_ptrace_fa,
+        get_claims=ptrace.get_scenario_claims,
         check_record=None,
     ),
     badbpf.SCENARIO_ID: PreparedScenario(
         artifact_names=badbpf.ARTIFACT_NAMES,
         execute=_run_badbpf,
+        get_claims=badbpf.get_scenario_claims,
         check_record=_require_current_badbpf,
     ),
     diamorphine.SCENARIO_ID: PreparedScenario(
         artifact_names=(diamorphine.ARTIFACT_NAME,),
         execute=_run_diamorphine,
+        get_claims=diamorphine.get_scenario_claims,
         check_record=_require_current_diamorphine,
     ),
 }
@@ -569,6 +579,9 @@ class ForensicOrchestrator:
             prepared_run = PreparedRun(scenario, artifacts, build_record)
 
         repository = _repository_state(self.repo_root)
+        manifest: dict[str, Any] | None = None
+        manifest_path: Path | None = None
+        phase = "scenario"
 
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         vm_off = False
@@ -594,9 +607,7 @@ class ForensicOrchestrator:
             finally:
                 console.section_end()
 
-            run_id, sequence = _make_run_id(
-                self._paths.experiments_dir, distro_id, scenario_id
-            )
+            run_id = _make_run_id(self._paths.experiments_dir, distro_id, scenario_id)
             run_root = self._paths.experiments_dir / run_id
             # exist_ok=False: an accepted run directory is never written twice.
             run_root.mkdir(parents=True)
@@ -619,7 +630,6 @@ class ForensicOrchestrator:
                 run_id=run_id,
                 scenario_id=scenario_id,
                 distro_id=distro_id,
-                sequence=sequence,
                 repository=repository,
                 command_log_name=command_log_path.name,
                 transcript_name=transcript_path.name,
@@ -630,80 +640,86 @@ class ForensicOrchestrator:
             _write_run_manifest(manifest_path, manifest)
 
             console.step_header("scenario execution")
-            scenario_facts = None
             try:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
                     guest = self._guest_facts(ssh)
-                    if prepared_run is None:
-                        run_interactive_shell(
-                            ssh,
-                            transcript_path,
-                            command_log_path=command_log_path,
-                        )
-                    else:
-                        scenario_facts, before_shutdown_cleanup = (
-                            prepared_run.scenario.execute(
+                    manifest["platform"].update(
+                        guest_os=guest.get("distro"),
+                        kernel=guest.get("kernel"),
+                        timezone=guest.get("timezone"),
+                        arch=guest.get("arch"),
+                    )
+                    manifest["timestamps"]["scenario_started_at"] = utc_now()
+                    try:
+                        if prepared_run is None:
+                            run_interactive_shell(
                                 ssh,
                                 transcript_path,
-                                command_log_path,
-                                staged_artifacts,
-                                prepared_run.build_record,
+                                command_log_path=command_log_path,
                             )
-                        )
-            except Exception:
-                ended_at = utc_now()
-                manifest.update(
-                    status="failed", scenario_status="failed", failed_phase="scenario"
-                )
-                manifest["timestamps"].update(
-                    scenario_ended_at=ended_at, run_ended_at=ended_at
-                )
-                _write_run_manifest(manifest_path, manifest)
-                raise
+                        else:
+                            facts, before_shutdown_cleanup = (
+                                prepared_run.scenario.execute(
+                                    ssh,
+                                    transcript_path,
+                                    command_log_path,
+                                    staged_artifacts,
+                                    prepared_run.build_record,
+                                )
+                            )
+                            manifest["scenario_facts"] = facts
+                    finally:
+                        manifest["timestamps"]["scenario_ended_at"] = utc_now()
+                    claims = (
+                        prepared_run.scenario.get_claims()
+                        if prepared_run is not None
+                        else interactive_shell_claims()
+                    )
+                    _validate_claim_refs(claims, run_root, manifest["scenario_facts"])
+                    manifest["claims"] = claims
+                    manifest["scenario_status"] = "completed"
             finally:
                 self.vm_manager.internet_off(vm_name, quiet=True)
                 console.section_end()
-
-            manifest["platform"].update(
-                guest_os=guest.get("distro"),
-                kernel=guest.get("kernel"),
-                timezone=guest.get("timezone"),
-            )
-            if prepared_run is not None:
-                manifest["scenario_facts"] = scenario_facts
-            manifest["scenario_status"] = "completed"
-            manifest["timestamps"]["scenario_ended_at"] = utc_now()
             _write_run_manifest(manifest_path, manifest)
 
             acquisition_path = None
             if acquire:
+                phase = "acquisition"
                 try:
                     acquisition_path, _, _ = self._run_acquisition(
                         vm_name,
                         run_id,
-                        before_shutdown=(
-                            run_cleanup if prepared_run is not None else None
-                        ),
+                        before_shutdown=run_cleanup
+                        if prepared_run is not None
+                        else None,
                     )
                     vm_off = True
-                    manifest["artifacts"]["acquisition_manifest"] = str(
-                        Path(acquisition_path).resolve().relative_to(run_root.resolve())
-                    )
-                    _write_run_manifest(manifest_path, manifest)
-                except Exception:
-                    manifest.update(status="failed", failed_phase="acquisition")
-                    manifest["timestamps"]["run_ended_at"] = utc_now()
-                    _write_run_manifest(manifest_path, manifest)
-                    raise
+                finally:
+                    acquisition_file = run_root / "dumps" / "acquisition.json"
+                    if acquisition_file.exists():
+                        manifest["artifacts"]["acquisition_manifest"] = (
+                            "dumps/acquisition.json"
+                        )
+                        manifest["artifacts"]["acquisition_log"] = (
+                            "dumps/acquisition.log"
+                        )
+                        acquisition = json.loads(
+                            acquisition_file.read_text(encoding="utf-8")
+                        )
+                        memory = acquisition["memory"]
+                        if memory is not None:
+                            manifest["timestamps"].update(
+                                ram_capture_started_at=memory["started_at"],
+                                ram_capture_ended_at=memory["ended_at"],
+                            )
             elif prepared_run is not None:
+                phase = "cleanup"
                 run_cleanup()
                 self.vm_manager.shutdown_vm(vm_name)
                 vm_off = True
 
             manifest["status"] = "completed"
-            manifest["timestamps"]["run_ended_at"] = utc_now()
-            _write_run_manifest(manifest_path, manifest)
-
             console.step_header("summary")
             console.ok(f"run: {self._display(run_root)}")
             console.info(
@@ -713,13 +729,31 @@ class ForensicOrchestrator:
             console.info(f"final VM state: {'off' if vm_off else 'running'}")
             console.section_end()
             return acquisition_path
+        except BaseException:
+            # Cancellation must leave a failed run too, without swallowing it.
+            if manifest is not None:
+                manifest.update(status="failed", failed_phase=phase)
+                if manifest["scenario_status"] != "completed":
+                    manifest["scenario_status"] = "failed"
+                    manifest["claims"] = []
+            raise
         finally:
-            if prepared_run is not None:
-                try:
-                    run_cleanup()
-                finally:
-                    if not vm_off:
-                        self.vm_manager.shutdown_vm(vm_name)
+            cleanup_completed = False
+            try:
+                if prepared_run is not None:
+                    try:
+                        run_cleanup()
+                    finally:
+                        if not vm_off:
+                            self.vm_manager.shutdown_vm(vm_name)
+                cleanup_completed = True
+            finally:
+                if manifest is not None and manifest_path is not None:
+                    if not cleanup_completed:
+                        manifest["status"] = "failed"
+                        manifest.setdefault("failed_phase", "cleanup")
+                    manifest["timestamps"]["run_ended_at"] = utc_now()
+                    _write_run_manifest(manifest_path, manifest)
 
     def _stage_run_inputs(
         self, run_root: Path, scenario_id: str, artifacts: tuple[Path, ...]
@@ -755,6 +789,7 @@ class ForensicOrchestrator:
             ". /etc/os-release 2>/dev/null; "
             'printf "distro=%s\\n" "${PRETTY_NAME:-unknown}"; '
             'printf "kernel=%s\\n" "$(uname -r)"; '
+            'printf "arch=%s\\n" "$(uname -m)"; '
             'printf "timezone=%s\\n" '
             '"$(cat /etc/timezone 2>/dev/null || '
             'timedatectl show -p Timezone --value 2>/dev/null || echo UTC)"'
@@ -762,6 +797,7 @@ class ForensicOrchestrator:
         facts: dict[str, str | None] = {
             "distro": None,
             "kernel": None,
+            "arch": None,
             "timezone": "UTC",
         }
         # No swallowing: a manifest recording kernel=null under a completed run
@@ -905,7 +941,7 @@ class ForensicOrchestrator:
             )
         vm_name = self._reset_lab(distro_id)
         # Compute run_id ONCE so dumps/ and analysis/ share the same timestamp.
-        run_id, _ = _make_run_id(self._paths.experiments_dir, distro_id, VERIFY_SCENARIO)
+        run_id = _make_run_id(self._paths.experiments_dir, distro_id, VERIFY_SCENARIO)
         run_dir = self._paths.experiments_dir / run_id
 
         _, memory_path, disk_path = self._run_acquisition(vm_name, run_id)
@@ -946,25 +982,36 @@ class ForensicOrchestrator:
         Returns (manifest path, memory image, disk image).
         """
         vm_disk_path = self.vm_manager.get_disk_path(vm_name)
-
         run_dir = self.dumper.run_dir(run_id)
-        memory_dump_path = run_dir / "memory" / MEMORY_DUMP_FILENAME
-        disk_dump_path = run_dir / "disk" / EVIDENCE_DISK_FILENAME
+        memory_path = run_dir / "memory" / MEMORY_DUMP_FILENAME
+        disk_path = run_dir / "disk" / EVIDENCE_DISK_FILENAME
+        metadata: AcquisitionManifest = {"memory": None, "disk": None}
 
         console.step_header("acquisition")
         try:
-            memory_meta = self.dumper.acquire_memory(vm_name, memory_dump_path)
-            # qemu-img convert needs the qcow2 not held by QEMU; a clean guest
-            # shutdown is the simplest way to release the lock.
-            console.step(
-                f"shutting down '{vm_name}' for offline disk acquisition..."
-            )
-            if before_shutdown is not None:
-                before_shutdown()
-            self.vm_manager.shutdown_vm(vm_name)
-            disk_meta = self.dumper.acquire_disk(vm_disk_path, disk_dump_path)
-            manifest_path = self.dumper.write_manifest(run_id, memory_meta, disk_meta)
-            return manifest_path, memory_dump_path, Path(disk_meta.path)
+            with (run_dir / "acquisition.log").open("a", encoding="utf-8") as log:
+                try:
+                    memory = acquisition_record(memory_path, "virsh dump --memory-only")
+                    metadata["memory"] = memory
+                    self.dumper.acquire_memory(vm_name, memory_path, memory, log)
+                    self.dumper.write_manifest(run_id, metadata)
+                    if before_shutdown is not None:
+                        before_shutdown()
+                    self.vm_manager.shutdown_vm(vm_name)
+                    disk = acquisition_record(
+                        disk_path, "qemu-img convert; ewfacquire; ewfverify"
+                    )
+                    metadata["disk"] = disk
+                    self.dumper.acquire_disk(vm_disk_path, disk_path, disk, log)
+                except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+                    traceback.print_exc(file=log)
+                    raise
+                finally:
+                    for record in (metadata["memory"], metadata["disk"]):
+                        if record is not None and record["sha256"] is None:
+                            record.setdefault("error", "acquisition did not complete")
+                    self.dumper.write_manifest(run_id, metadata)
+            return str(run_dir / "acquisition.json"), memory_path, disk_path
         finally:
             console.section_end()
 
@@ -1004,12 +1051,44 @@ def _verified_staged_artifacts(
     return tuple(run_root / item["path"] for item in input_record["artifacts"])
 
 
+def _validate_claim_refs(
+    claims: list[ScenarioClaim], run_root: Path, scenario_facts: dict[str, Any]
+) -> None:
+    """Refuse to publish claims with duplicate IDs or unsupported references."""
+    ids = [claim["id"] for claim in claims]
+    if len(ids) != len(set(ids)) or any(not claim_id for claim_id in ids):
+        raise ValueError("scenario claim IDs must be nonempty and unique")
+    records = {
+        row["id"]: row
+        for row in (
+            json.loads(line)
+            for line in (run_root / "command_log.jsonl").read_text().splitlines()
+        )
+    }
+    for claim in claims:
+        if not claim["basis"]:
+            raise ValueError(f"claim has no basis references: {claim['id']}")
+        for ref in claim["basis"]:
+            if ref.startswith("command_log.jsonl#"):
+                record = records.get(ref.partition("#")[2])
+                valid = record is not None and record["status"] in (
+                    "success",
+                    "tolerated_failure",
+                )
+            elif ref.startswith("manifest.json#scenario_facts."):
+                name = ref.removeprefix("manifest.json#scenario_facts.")
+                valid = scenario_facts.get(name) is not None
+            else:
+                valid = ref.startswith("inputs/") and (run_root / ref).is_file()
+            if not valid:
+                raise ValueError(f"unsupported claim reference: {claim['id']}: {ref}")
+
+
 def _new_run_manifest(
     *,
     run_id: str,
     scenario_id: str,
     distro_id: str,
-    sequence: int,
     repository: dict[str, str],
     command_log_name: str,
     transcript_name: str,
@@ -1021,22 +1100,27 @@ def _new_run_manifest(
     manifest: dict[str, Any] = {
         "run_id": run_id,
         "scenario": _SCENARIO_SHORT[scenario_id],
-        "distro_token": _DISTRO_SHORT[distro_id],
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "sequence": sequence,
         "platform": {
             "distro_id": distro_id,
             "guest_os": None,
             "kernel": None,
+            "arch": None,
             "timezone": "UTC",
             "profile": "vanilla",
         },
         "repository": repository,
         "timestamps": {
-            "scenario_started_at": utc_now(),
+            "scenario_started_at": None,
+            "scenario_ended_at": None,
+            "ram_capture_started_at": None,
+            "ram_capture_ended_at": None,
+            "run_ended_at": None,
         },
         "status": "running",
         "scenario_status": "running",
+        "inputs": [input_record] if input_record is not None else [],
+        "scenario_facts": {},
+        "claims": [],
         "artifacts": {
             "command_log": command_log_name,
             "terminal_transcript": transcript_name,
@@ -1049,8 +1133,6 @@ def _new_run_manifest(
             "created_at": snapshot_created_at,
         },
     }
-    if input_record is not None:
-        manifest["inputs"] = [input_record]
     return manifest
 
 
@@ -1097,9 +1179,7 @@ _DISTRO_SHORT = {
 }
 
 
-def _make_run_id(
-    experiments_dir: Path, distro_id: str, scenario_id: str
-) -> tuple[str, int]:
+def _make_run_id(experiments_dir: Path, distro_id: str, scenario_id: str) -> str:
     """
     Build the short per-run identifier:
         "{scenario_short}-{distro_short}-{YYYYMMDD}-{NN}"
@@ -1107,7 +1187,7 @@ def _make_run_id(
     sequence already present under experiments_dir for the same
     scenario/distro/date prefix. Used as the experiment directory name under
     experiments_dir; its dumps/ and analysis/ subtrees stay in lockstep for a
-    given run. Returns (run_id, sequence).
+    given run.
     """
     scenario_short = _SCENARIO_SHORT[scenario_id]
     distro_short = _DISTRO_SHORT[distro_id]
@@ -1121,4 +1201,4 @@ def _make_run_id(
     sequence = max(existing_seqs, default=0) + 1
     if sequence > 99:
         raise RuntimeError(f"run-id sequence exhausted for prefix {prefix!r}")
-    return f"{prefix}{sequence:02d}", sequence
+    return f"{prefix}{sequence:02d}"

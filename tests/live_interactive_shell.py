@@ -72,7 +72,13 @@ def main() -> None:
 
         with vm.open_ssh(vm_name) as ssh:
             before_history = _history(ssh)
-            results = run_interactive_shell(ssh, TRANSCRIPT)
+            command_log = TRANSCRIPT.with_suffix(".jsonl")
+            command_log.write_text("", encoding="utf-8")
+            results = run_interactive_shell(
+                ssh,
+                TRANSCRIPT,
+                command_log_path=command_log,
+            )
             after_history = _history(ssh)
 
             if after_history[: len(before_history)] != before_history:
@@ -82,12 +88,19 @@ def main() -> None:
 
             by_command = {result.command: result for result in results}
             failed = by_command[EXPECTED_FAILURE]
-            if failed.exit_code == 0 or "command not found" not in failed.combined_output:
-                raise RuntimeError("nonexistent command did not produce the expected failure")
+            if (
+                failed.exit_code == 0
+                or "command not found" not in failed.combined_output
+            ):
+                raise RuntimeError(
+                    "nonexistent command did not produce the expected failure"
+                )
 
             continued = by_command[COMMANDS[3]]
             if continued.exit_code != 0:
-                raise RuntimeError("the shell did not continue after the expected failure")
+                raise RuntimeError(
+                    "the shell did not continue after the expected failure"
+                )
 
             first_pid = re.search(r"Bash PID: (\d+)", results[0].combined_output)
             later_pid = re.search(

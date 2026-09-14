@@ -7,12 +7,43 @@ from unittest.mock import call, MagicMock
 
 import pytest
 
-from orchestrator.core.orchestrator import ForensicOrchestrator
-from orchestrator.core.provenance import file_sha256
+from orchestrator.core.orchestrator import ForensicOrchestrator, _validate_claim_refs
+from orchestrator.core.provenance import file_sha256, utc_now
 from scenarios.kernel_diamorphine import runner as diamorphine
 from scenarios.kernel_ebpf_badbpf import runner as badbpf
 from scenarios.ptrace_fa import runner as ptrace
 from scenarios.userland_father_ldpreload import runner as father
+
+
+def assert_scenario_claims(scenario, run_root: Path, facts: dict[str, object]) -> None:
+    claims = scenario.get_scenario_claims()
+    for claim in claims:
+        assert set(claim) == {
+            "id", "statement", "basis", "basis_type", "validation_limit"
+        }
+        assert isinstance(claim["id"], str) and claim["id"]
+        assert isinstance(claim["statement"], str) and claim["statement"]
+        assert isinstance(claim["validation_limit"], str) and claim["validation_limit"]
+        assert claim["basis_type"] in {
+            "successful_command",
+            "successful_commands",
+            "successful_execution_and_scenario_fact",
+        }
+        for ref in claim["basis"]:
+            if ref.startswith("inputs/"):
+                path = run_root / ref
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"prepared input")
+    _validate_claim_refs(claims, run_root, facts)
+    records = [
+        json.loads(line)
+        for line in (run_root / "command_log.jsonl").read_text().splitlines()
+    ]
+    assert len({row["id"] for row in records}) == len(records)
+    assert all(
+        re.fullmatch(r".*T\d{2}:\d{2}:\d{2}\.\d{6}Z", row["recorded_at"])
+        for row in records
+    )
 
 
 @pytest.fixture
@@ -189,9 +220,9 @@ def test_diamorphine_uses_direct_tmp_reconnaissance_note(tmp_path: Path, monkeyp
         "pid=123\nbefore_uid=1000\nbefore=user\nafter_uid=0\nafter=root",
         "Module Size Used by",
     ]
-    results = [MagicMock(combined_output=output) for output in outputs]
+    results = [MagicMock(combined_output=output, exit_code=0) for output in outputs]
     run_command = MagicMock(side_effect=results)
-    monkeypatch.setattr(diamorphine, "run_logged_command", run_command)
+    terminal.run = run_command
     artifact = tmp_path / diamorphine.ARTIFACT_NAME
     artifact.write_bytes(b"module")
 
@@ -203,7 +234,7 @@ def test_diamorphine_uses_direct_tmp_reconnaissance_note(tmp_path: Path, monkeyp
         build_record={"target": {"kernel": "test-kernel"}},
     )
 
-    commands = [item.args[2] for item in run_command.call_args_list]
+    commands = [item.args[0] for item in run_command.call_args_list]
     assert diamorphine.RECON_PARENT == "/tmp"
     assert "mkdir -p -- /tmp/diamorphine_secret_dir" in commands
     assert any(
@@ -214,8 +245,8 @@ def test_diamorphine_uses_direct_tmp_reconnaissance_note(tmp_path: Path, monkeyp
     )
     note = "cat -- /tmp/diamorphine_secret_dir/diamorphine_secret_file.txt"
     assert commands.count(note) == 1
-    assert facts["reconnaissance_note_validated"] is True
-    assert facts["reconnaissance_parent_path"] == "/tmp"
+    assert facts["signal_64_helper_pid"] == 123
+    assert_scenario_claims(diamorphine, tmp_path, facts)
 
 
 def test_father_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
@@ -223,29 +254,28 @@ def test_father_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
     terminal = ssh.open_terminal.return_value
     terminal.transcript = "transcript"
     listing = "\n".join(
-        f"-rw-r--r-- 1 labuser labuser 0 {name}"
-        for name in father.STAGED_FILE_NAMES
+        f"-rw-r--r-- 1 labuser labuser 0 {name}" for name in father.STAGED_FILE_NAMES
     )
     outputs = {
         father.LIST_HIDDEN_DIR: [listing, "total 0"],
     }
     default = iter(["ubuntu-22.04 x86_64"] + [""] * 40)
 
-    def fake_run(_terminal, _log, command, **_kwargs):
+    def fake_run(command, **_kwargs):
         queue = outputs.get(command)
         output = queue.pop(0) if queue else next(default)
-        return MagicMock(combined_output=output)
+        return MagicMock(combined_output=output, exit_code=0)
 
     run_command = MagicMock(side_effect=fake_run)
-    # Father runs every command through CommandLog, so patch the primitive it
-    # delegates to rather than a name in the runner module.
-    monkeypatch.setattr("scenarios.command_log.run_logged_command", run_command)
-    monkeypatch.setattr(father.time, "sleep", lambda *_a, **_k: None)
+    terminal.run = run_command
+    sleep = MagicMock()
+    monkeypatch.setattr(father.time, "sleep", sleep)
+    backdoor = MagicMock()
     monkeypatch.setattr(
-        father, "_validate_backdoor", lambda _ssh: (MagicMock(), {"client_port": 54321})
+        father, "_validate_backdoor", lambda _ssh: (backdoor, {"client_port": 54321})
     )
 
-    _facts, _cleanup = father.run_father(
+    facts, cleanup = father.run_father(
         ssh,
         tmp_path / "transcript.txt",
         command_log_path=tmp_path / "command_log.jsonl",
@@ -253,18 +283,48 @@ def test_father_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
         build_record={"target": {"distro_id": "ubuntu-22.04", "arch": "x86_64"}},
     )
 
+    assert_scenario_claims(father, tmp_path, facts)
+    assert [claim["id"] for claim in father.get_scenario_claims()] == [
+        "preload_persistence",
+        "implant_timestomp",
+        "credential_staging",
+        "runtime_loading_backdoor",
+        "deleted_staging_artifact",
+        "recon_staged",
+        "shell_history_cleanup",
+    ]
+    assert facts["recon_stage_hidden"] is True
+    assert sleep.call_args_list == [call(12)] * 5 + [call(30)]
+    backdoor.close.assert_not_called()
+    cleanup()
+    backdoor.close.assert_called_once()
     assert father.VICTIM_ARTIFACT == "/tmp/rk.so"
     assert father.HIDDEN_DIR == "/tmp"
     assert father.HARVEST_PATH == "/tmp/__malicious_harvest"
     assert father.RECON_STAGE_PATH == "/tmp/__malicious_recon"
     ssh.put.assert_called_once_with(tmp_path / father.ARTIFACT_NAME, "/tmp/rk.so")
-    commands = [item.args[2] for item in run_command.call_args_list]
+    commands = [item.args[0] for item in run_command.call_args_list]
+    assert commands == [
+        '. /etc/os-release; printf \'%s-%s %s\\n\' "$ID" "$VERSION_ID" "$(uname -m)"',
+        *father.RECON_COMMANDS,
+        father.INSTALL_IMPLANT,
+        father.TIMESTOMP_IMPLANT,
+        father.HARVEST_SHADOW,
+        father.LIST_HIDDEN_DIR,
+        father.WRITE_PRELOAD_CONFIG,
+        father.RESTART_SSH,
+        father.LIST_HIDDEN_DIR,
+        *father.CLEANUP_COMMANDS,
+    ]
     assert f"sudo -n install -m 0600 /etc/shadow {father.HARVEST_PATH}" in commands
     # Recon is staged, not discarded: id/uname/os-release tee to console and
     # file; the account database is staged only, without echoing it in full.
     assert f"cat /etc/passwd >> {father.RECON_STAGE_PATH}" in commands
     assert f"id | tee -a {father.RECON_STAGE_PATH}" in commands
-    assert f"sudo -n touch -r {father.LIBC_REFERENCE} {father.INSTALLED_LIBRARY}" in commands
+    assert (
+        f"sudo -n touch -r {father.LIBC_REFERENCE} {father.INSTALLED_LIBRARY}"
+        in commands
+    )
     assert "ls -la -- /tmp" in commands
     assert "rm -f -- /tmp/rk.so" in commands
     # Default cleanup preserves auth.log/syslog for investigation.
@@ -293,10 +353,10 @@ def test_ptrace_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
     )
     run_command = MagicMock(
         side_effect=lambda *_args, **_kwargs: MagicMock(
-            combined_output=next(outputs)
+            combined_output=next(outputs), exit_code=0
         )
     )
-    monkeypatch.setattr(ptrace, "run_logged_command", run_command)
+    terminal.run = run_command
     monkeypatch.setattr(ptrace, "_open_listener", lambda: MagicMock())
     monkeypatch.setattr(
         ptrace,
@@ -312,6 +372,7 @@ def test_ptrace_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
         build_record={"target": {"distro_id": "ubuntu-22.04", "arch": "x86_64"}},
     )
 
+    assert_scenario_claims(ptrace, tmp_path, facts)
     assert facts["victim_pid"] == 123
     assert ptrace.VICTIM_ROOT == "/tmp"
     assert ptrace.VICTIM_ARTIFACTS == (
@@ -324,7 +385,7 @@ def test_ptrace_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
             ptrace.ARTIFACT_NAMES, ptrace.VICTIM_ARTIFACTS, strict=True
         )
     ]
-    commands = [item.args[2] for item in run_command.call_args_list]
+    commands = [item.args[0] for item in run_command.call_args_list]
     assert (
         "install -m 0755 /tmp/ptrace_fa-shellcode_inject_fa /tmp/shellcode_inject_fa"
         in commands
@@ -425,6 +486,12 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     error = RuntimeError(f"{failure_phase} failed")
     facts = {"validated": True}
     events = []
+
+    def timestamp():
+        events.append("timestamp")
+        return utc_now()
+
+    monkeypatch.setattr("orchestrator.core.orchestrator.utc_now", timestamp)
     cleanup_socket = None
     build_scenario = scenario_id
     cache, artifacts = prebuilt_caches.get(build_scenario, (None, []))
@@ -483,23 +550,33 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         def _guest_facts(self, _ssh):
             return {"distro": "Ubuntu", "kernel": "test", "timezone": "UTC"}
 
-        def _run_acquisition(
-            self, _vm_name, run_id, *, before_shutdown=None
-        ):
+        def _run_acquisition(self, _vm_name, run_id, *, before_shutdown=None):
             assert fake_vm.state == "on"
             if cleanup_socket is not None:
                 assert not cleanup_socket.closed
             else:
                 assert before_shutdown is None
             events.append("memory")
-            if failure_phase == "acquisition":
-                raise error
             if before_shutdown is not None:
                 before_shutdown()
             events.append("shutdown")
             path = tmp_path / run_id / "dumps" / "acquisition.json"
             path.parent.mkdir(parents=True)
-            path.write_text("{}\n", encoding="utf-8")
+            path.write_text(
+                json.dumps(
+                    {
+                        "memory": {
+                            "started_at": "2026-09-12T00:00:00.123456Z",
+                            "ended_at": "2026-09-12T00:00:01.654321Z",
+                        },
+                        "disk": None,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (path.parent / "acquisition.log").touch()
+            if failure_phase == "acquisition":
+                raise error
             fake_vm.state = "off"
             self.acquisition_path = str(path)
             return self.acquisition_path, path, path
@@ -555,10 +632,12 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         "orchestrator.core.orchestrator.diamorphine.run_diamorphine",
         fake_diamorphine,
     )
-    monkeypatch.setattr(
-        "orchestrator.core.orchestrator.badbpf.run_badbpf", fake_badbpf
-    )
+    monkeypatch.setattr("orchestrator.core.orchestrator.badbpf.run_badbpf", fake_badbpf)
 
+    monkeypatch.setattr(
+        "orchestrator.core.orchestrator._validate_claim_refs",
+        lambda *_args: None,
+    )
     orchestrator = FakeOrchestrator()
     if failure_phase:
         with pytest.raises(RuntimeError) as raised:
@@ -583,21 +662,24 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     if build_scenario in prebuilt_caches and not failure_phase:
         assert cache is not None
         staged = manifest["inputs"][0]
-        assert (
-            manifest_path.parent / staged["build_json"]["path"]
-        ).read_bytes() == (cache / "build.json").read_bytes()
+        assert (manifest_path.parent / staged["build_json"]["path"]).read_bytes() == (
+            cache / "build.json"
+        ).read_bytes()
         assert [item["sha256"] for item in staged["artifacts"]] == [
-            hashlib.sha256(artifact.read_bytes()).hexdigest()
-            for artifact in artifacts
+            hashlib.sha256(artifact.read_bytes()).hexdigest() for artifact in artifacts
         ]
-        assert staged["build_json"]["sha256"] == hashlib.sha256(
-            (cache / "build.json").read_bytes()
-        ).hexdigest()
+        assert (
+            staged["build_json"]["sha256"]
+            == hashlib.sha256((cache / "build.json").read_bytes()).hexdigest()
+        )
     assert fake_vm.shutdowns == expected_shutdowns
     assert manifest["repository"]["commit"] == "test-commit"
     assert manifest["artifacts"]["command_log"] == "command_log.jsonl"
     assert manifest["artifacts"]["terminal_transcript"] == "terminal_transcript.txt"
-    assert ("scenario_facts" in manifest) is expect_facts
+    assert manifest["scenario_facts"] == (facts if expect_facts else {})
+    assert (manifest["claims"] == []) is (failure_phase == "scenario")
+    if scenario_id == father.SCENARIO_ID and failure_phase != "scenario":
+        assert manifest["claims"] == father.get_scenario_claims()
     if expect_facts:
         assert manifest["scenario_facts"] == facts
     if failure_phase:
@@ -617,14 +699,27 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             assert "acquisition_manifest" not in manifest["artifacts"]
     if failure_phase == "acquisition":
         assert manifest["scenario_status"] == "completed"
-    if failure_phase == "acquisition":
-        assert "acquisition_manifest" not in manifest["artifacts"]
+    if acquire and failure_phase != "scenario":
+        assert manifest["artifacts"]["acquisition_manifest"] == "dumps/acquisition.json"
+        assert (
+            manifest["timestamps"]["ram_capture_started_at"]
+            == "2026-09-12T00:00:00.123456Z"
+        )
+        assert (
+            manifest["timestamps"]["ram_capture_ended_at"]
+            == "2026-09-12T00:00:01.654321Z"
+        )
+    else:
+        assert manifest["timestamps"]["ram_capture_started_at"] is None
+        assert manifest["timestamps"]["ram_capture_ended_at"] is None
+    assert not {"date", "sequence", "distro_token"} & manifest.keys()
     if cleanup_socket is not None:
         assert cleanup_socket.closed
         assert events.index("backdoor close") < events.index("shutdown")
         if acquire:
             assert events.index("memory") < events.index("backdoor close")
     assert fake_vm.state == expected_vm_state
+    assert events[-1] == "timestamp"
 
 
 @pytest.mark.parametrize(
@@ -724,3 +819,103 @@ def test_father_records_the_established_connection(
         "server_port": 22,
     }
     assert client.sendall.call_args_list == [call(father.SHELL_PASSWORD), call(b"id\n")]
+
+
+def test_badbpf_claims_reference_validated_behavior(tmp_path: Path, monkeypatch):
+    ssh = MagicMock()
+    terminal = ssh.open_terminal.return_value
+    terminal.transcript = "transcript"
+    outputs = iter(
+        [
+            "",
+            "test-kernel",
+            "",
+            "",
+            "10",
+            "",
+            "ALIVE",
+            "123",
+            "",
+            "",
+            "",
+            "Hijacked PID 123 instead of '/usr/bin/uptime'",
+            "1000 /usr/bin/uptime | kworker/u8:2",
+            "123\nVISIBLE",
+            "/a",
+            "456",
+            "",
+            "",
+            "ALIVE",
+            "HIDDEN",
+            "Name: kworker/u8:2\nPid: 123",
+            "",
+        ]
+    )
+    terminal.run.side_effect = lambda *_args, **_kwargs: MagicMock(
+        combined_output=next(outputs),
+        exit_code=0,
+    )
+    monkeypatch.setattr(badbpf, "_open_pool_listener", lambda: MagicMock())
+    monkeypatch.setattr(
+        badbpf,
+        "_accept_pool_connection",
+        lambda _listener: (
+            "marker",
+            "reply",
+            MagicMock(),
+            {"client_port": 12345},
+        ),
+    )
+    facts, cleanup = badbpf.run_badbpf(
+        ssh,
+        tmp_path / "transcript.txt",
+        command_log_path=tmp_path / "command_log.jsonl",
+        artifact_paths=tuple(tmp_path / name for name in badbpf.ARTIFACT_NAMES),
+        build_record={"target": {"kernel": "test-kernel"}},
+    )
+    assert facts["worker_pid"] == 123 and facts["pidhide_pid"] == 456
+    assert_scenario_claims(badbpf, tmp_path, facts)
+    cleanup()
+
+
+def test_interactive_claims_allow_the_expected_failure(tmp_path: Path):
+    from scenarios.interactive_shell import runner as interactive
+
+    ssh = MagicMock()
+    terminal = ssh.open_terminal.return_value
+    terminal.transcript = "transcript"
+    terminal.run.side_effect = lambda command, **_kwargs: MagicMock(
+        combined_output="Interactive shell artifact"
+        if command.startswith("cat ")
+        else "output",
+        exit_code=127 if command == interactive.EXPECTED_FAILURE else 0,
+    )
+    interactive.run_interactive_shell(
+        ssh,
+        tmp_path / "transcript.txt",
+        command_log_path=tmp_path / "command_log.jsonl",
+    )
+    assert_scenario_claims(interactive, tmp_path, {})
+
+
+def test_ptrace_upload_failure_is_logged_and_closes_listener(
+    tmp_path: Path, monkeypatch
+):
+    ssh = MagicMock()
+    ssh.open_terminal.return_value.transcript = "transcript"
+    error = OSError("upload failed")
+    ssh.put.side_effect = error
+    listener = MagicMock()
+    monkeypatch.setattr(ptrace, "_open_listener", lambda: listener)
+    with pytest.raises(OSError) as raised:
+        ptrace.run_ptrace_fa(
+            ssh,
+            tmp_path / "transcript.txt",
+            command_log_path=tmp_path / "command_log.jsonl",
+            artifact_paths=tuple(tmp_path / name for name in ptrace.ARTIFACT_NAMES),
+            build_record={},
+        )
+    assert raised.value is error
+    listener.close.assert_called_once()
+    record = json.loads((tmp_path / "command_log.jsonl").read_text())
+    assert record["id"] == "upload_artifact" and record["status"] == "failure"

