@@ -1,31 +1,12 @@
-# Investigation documents
+# Investigation records
 
-New investigation notebooks use the exact manifest identifiers:
+Superseded methodology and result-contract reports were purged by user directive
+on 2026-09-10. Remaining technical records are evidence leads, not methodology.
+Revalidate their locators before reusing observations; acquired evidence and raw
+exports were preserved.
 
-```text
-docs/investigations/<scenario_id>/<run_id>/
-  runme_disk_investigation.md
-  runme_memory_investigation.md
-  runme_timeline_investigation.md
-  runme_case_summary.md
-```
-
-Create only the source notebooks that exist. Add `runme_case_summary.md` only
-after the applicable source notebooks have been accepted. Its two summary
-tables are the fixed per-artifact evidence matrix and the source metric summary
-defined in `../../ai/archive/METHODOLOGY.md`; cross-source interpretation follows them.
-A run-specific source notebook pins `RUN_ID` once, derives other case paths and
-parameters from the run metadata, and writes new output beneath:
-
-```text
-shared/investigations/<run_id>/derived/<source>/
-```
-
-Acquired evidence and raw exports remain under `shared/experiments/<run_id>/`
-and are never copied into `docs/`. The ignored `shared/investigations/` tree is
-the analyst workspace; `docs/investigations/` holds versioned notebooks and
-accepted narrative records.
-
-Do not create a separate scenario template until at least one reconstructed
-run has completed and the reusable cells have been reviewed. Existing flat
-reports remain in place until they are deliberately superseded.
+Current work starts with [Father](../../investigations/father/README.md).
+The sole approved table specification is
+[RESULTS_PREVIEW.md](../../investigations/father/RESULTS_PREVIEW.md), read-only.
+[INVESTIGATION_METHOD.md](../INVESTIGATION_METHOD.md) supplies operational rules.
+Deletion recovery is in scope; metric selection is closed.
