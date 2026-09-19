@@ -530,6 +530,219 @@ Father Sections 2–5 (surrounding activity, RAM, deletion recovery, chronology)
 tables for real, then ptrace / Diamorphine / BadBPF on the same skeleton, then the distro
 replicas. This is forensic analysis under the existing per-section human gates, not code work.
 
+## Section prompts (queue)
+
+Paste in order. Each ends leaving the tree dirty; ac reviews the pasted output and commits.
+
+### Section 2 — surrounding activity
+
+```text
+Repository: /home/anto/linux-multisource-dfir-lab
+
+Read, in this order, and nothing else:
+1. AGENTS.md
+2. ai/CONTEXT.md — routing. You are in the supervised "Forensics" stage.
+3. ai/forensic/CONTEXT.md
+4. ai/RULES.md, sections "Findings and manual assessment" and
+   "Investigation implementation and delivery".
+5. ai/tasks/investigation-refactor.md, sections "Environment" and
+   "Father notebook blueprint" (the section you are building).
+6. investigations/common/forensics.py — the helpers you must reuse.
+7. investigations/father/investigation.ipynb — Sections 0-1, for style and for
+   the variables already bound.
+
+Style, non-negotiable, matching Sections 0-1:
+- One block = one markdown question, one short code cell, one empty markdown
+  cell reading "**Interpretation.** _(to write)_". You do NOT write
+  interpretations; the analyst does.
+- Visible commands through fx.sh, bounded display via tail= or fx.show.
+  Paths are relative to the case directory (the notebook has already chdir-ed).
+- Do NOT create Finding objects anywhere. Findings are written by hand in
+  Section 6.
+- Enumerate before selecting. Never grep for a name, port or path taken from
+  the scenario; find it in the evidence and say where it came from.
+- No raise on an expected result. Print what was found, including zero.
+- Keep each code cell under about 25 lines. If it needs more, it is doing too
+  much.
+
+Write scope: investigations/father/investigation.ipynb only. Do not touch
+forensics.py, prepare.py, the ICM, or the other sections.
+
+Write no tests. Verify by execution: restart the kernel, run Sections 0 through
+the one you built, and paste the real output of each new block in your reply.
+If a block fails, paste the failure.
+
+Environment: .venv/bin/python; volatility is vol3; do not commit; keep the
+handoff in ai/tasks/investigation-refactor.md to at most 12 lines.
+
+Task: build Section 2 of the notebook, replacing its placeholder markdown.
+
+Start by reading, and reporting in your reply, what the evidence already gives
+you to pivot on:
+  investigation/output/s1-05-object-strings.txt   (strings from the object)
+  investigation/output/s1-02-recent-changes.csv   (what changed before imaging)
+Pick the paths, filenames, user names and constants worth following. Say which
+you chose and why. Those choices drive the blocks below.
+
+Blocks:
+2.1 Which login sessions exist? Extract wtmp and btmp with fcat, read them with
+    `last -F -i -f` and `lastb -F -i -f` under TZ=UTC.
+2.2 What local accounts and privileges existed? Extract passwd, group, shadow
+    metadata and sudoers; show them.
+2.3 What do the authentication and service logs record? Extract auth.log,
+    syslog and the journal; search them for the account names and times from
+    2.1 and the strings from 1.5. Show the matching lines with line numbers.
+2.4 Is there shell history for any account? Look for history files in the
+    bodyfile; extract and show any that exist. Absence is a bounded negative,
+    not erasure - state the scope you searched.
+2.5 What exists in /tmp and /dev/shm? Enumerate both allocated and deleted
+    entries with fls; show the inventory before selecting anything.
+2.6 For each staged file worth examining, extract the bytes with icat and
+    characterise it: file, sha256sum, and where the content looks like a copy
+    of a system file, compare SHA-256 of the extracted bytes against the
+    SHA-256 of the extracted original. Compare bytes, never decoded text.
+```
+
+### Section 3 — memory
+
+```text
+Repository: /home/anto/linux-multisource-dfir-lab
+
+Read, in this order, and nothing else:
+1. AGENTS.md
+2. ai/CONTEXT.md — routing. You are in the supervised "Forensics" stage.
+3. ai/forensic/CONTEXT.md
+4. ai/RULES.md, sections "Findings and manual assessment" and
+   "Investigation implementation and delivery".
+5. ai/tasks/investigation-refactor.md, sections "Environment" and
+   "Father notebook blueprint" (the section you are building).
+6. investigations/common/forensics.py — the helpers you must reuse.
+7. investigations/father/investigation.ipynb — Sections 0-1, for style and for
+   the variables already bound.
+
+Style, non-negotiable, matching Sections 0-1:
+- One block = one markdown question, one short code cell, one empty markdown
+  cell reading "**Interpretation.** _(to write)_". You do NOT write
+  interpretations; the analyst does.
+- Visible commands through fx.sh, bounded display via tail= or fx.show.
+  Paths are relative to the case directory (the notebook has already chdir-ed).
+- Do NOT create Finding objects anywhere. Findings are written by hand in
+  Section 6.
+- Enumerate before selecting. Never grep for a name, port or path taken from
+  the scenario; find it in the evidence and say where it came from.
+- No raise on an expected result. Print what was found, including zero.
+- Keep each code cell under about 25 lines. If it needs more, it is doing too
+  much.
+
+Write scope: investigations/father/investigation.ipynb only. Do not touch
+forensics.py, prepare.py, the ICM, or the other sections.
+
+Write no tests. Verify by execution: restart the kernel, run Sections 0 through
+the one you built, and paste the real output of each new block in your reply.
+If a block fails, paste the failure.
+
+Environment: .venv/bin/python; volatility is vol3; do not commit; keep the
+handoff in ai/tasks/investigation-refactor.md to at most 12 lines.
+
+Task: build Section 3 of the notebook, replacing its placeholder markdown.
+
+The RAM baseline is already prepared: investigation/prepared/raw/*.json holds
+banners, pslist, psaux, pstree, proc.Maps, lsof, sockstat, lsmod and kmsg.
+Load those with fx.load_vol instead of re-running vol3. Only the plugins not in
+that set are run inline with fx.sh.
+
+Blocks:
+3.1 Does the image match the symbols? Show the prepared banners result.
+3.2 What processes existed, and how are they related? pstree and psaux from the
+    prepared JSON; show a bounded view.
+3.3 Which processes map the object found in Section 1? Filter proc.Maps by the
+    object path observed there - not by a path you typed. Count distinct
+    PID + path pairs, not mapping rows.
+3.4 Is LD_PRELOAD present in any process environment? Run linux.envars inline.
+    A negative here is the expected result for a file-based preload and must be
+    reported as such, not as a failure.
+3.5 Which endpoints were open at capture? Show sockstat and lsof from the
+    prepared JSON, enumerated in full first; then attribute the ones belonging
+    to the processes from 3.3.
+3.6 Does memory hold shell history the disk does not? Run linux.bash inline for
+    the relevant PIDs.
+3.7 Can the object be recovered from memory? Run linux.elfs with --dump for a
+    mapping PID, then sha256sum the result and compare it with the disk copy
+    extracted in 1.5.
+3.8 Are kernel-level mechanisms clean? Run linux.malware.check_syscall,
+    linux.malware.modxview and linux.ebpf inline, plus the prepared lsmod and
+    kmsg. Valid zero rows are a result, not an error - these negatives are the
+    baseline the kernel scenarios will be compared against.
+```
+
+### Section 4 — deletion recovery
+
+```text
+Repository: /home/anto/linux-multisource-dfir-lab
+
+Read, in this order, and nothing else:
+1. AGENTS.md
+2. ai/CONTEXT.md — routing. You are in the supervised "Forensics" stage.
+3. ai/forensic/CONTEXT.md
+4. ai/RULES.md, sections "Findings and manual assessment" and
+   "Investigation implementation and delivery".
+5. ai/tasks/investigation-refactor.md, sections "Environment" and
+   "Father notebook blueprint" (the section you are building).
+6. investigations/common/forensics.py — the helpers you must reuse.
+7. investigations/father/investigation.ipynb — Sections 0-1, for style and for
+   the variables already bound.
+
+Style, non-negotiable, matching Sections 0-1:
+- One block = one markdown question, one short code cell, one empty markdown
+  cell reading "**Interpretation.** _(to write)_". You do NOT write
+  interpretations; the analyst does.
+- Visible commands through fx.sh, bounded display via tail= or fx.show.
+  Paths are relative to the case directory (the notebook has already chdir-ed).
+- Do NOT create Finding objects anywhere. Findings are written by hand in
+  Section 6.
+- Enumerate before selecting. Never grep for a name, port or path taken from
+  the scenario; find it in the evidence and say where it came from.
+- No raise on an expected result. Print what was found, including zero.
+- Keep each code cell under about 25 lines. If it needs more, it is doing too
+  much.
+
+Write scope: investigations/father/investigation.ipynb only. Do not touch
+forensics.py, prepare.py, the ICM, or the other sections.
+
+Write no tests. Verify by execution: restart the kernel, run Sections 0 through
+the one you built, and paste the real output of each new block in your reply.
+If a block fails, paste the failure.
+
+Environment: .venv/bin/python; volatility is vol3; do not commit; keep the
+handoff in ai/tasks/investigation-refactor.md to at most 12 lines.
+
+Task: build Section 4 of the notebook, replacing its placeholder markdown.
+
+Before starting, check that photorec is installed (testdisk package) and report
+it if not. ext4magic and debugfs are present.
+
+Known before you start, from the prepared bodyfiles: every unallocated inode
+record in this image has size 0, so inode-level content recovery is expected to
+fail. That expected negative must be demonstrated and recorded, not skipped.
+
+Blocks:
+4.1 Which deleted entries survive? fls -rdp over the directories of interest,
+    plus the non-allocated rows of the prepared bodyfile.
+4.2 Can content be recovered from a candidate inode? istat, then icat -r, then
+    file and sha256sum on whatever comes out. Show the empty result if empty.
+4.3 Does the ext4 journal recover a known path in a bounded window? Dump the
+    journal with debugfs, then run ext4magic for the target path over a time
+    window justified by Sections 1 and 2. This step needs a read-only mount
+    with noload; mount it, use it, unmount it in the same cell.
+4.4 Does carving recover it? Run prepare.py --stage disk --with-unallocated to
+    produce the unallocated extract, carve it with photorec restricted to ELF,
+    and map candidates back to blocks with blkcalc. Validate any candidate
+    against the SHA-256 of the object extracted in 1.5.
+4.5 State the outcome for each attempt as exactly one of: content recovered,
+    partial content recovered, metadata or name trace only, no result in
+    examined scope, tool failure, not attempted.
+```
+
 ## Test policy (applies from Stage 1 onward)
 
 **Boundary.** Runner, orchestrator and claim/manifest code is ac's own code and produces the
