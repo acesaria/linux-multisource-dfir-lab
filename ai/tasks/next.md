@@ -13,68 +13,69 @@ Read, in this order, and nothing else:
 4. `ai/RULES.md`, sections "Findings and manual assessment" and
    "Investigation implementation and delivery".
 5. `ai/tasks/investigation-refactor.md`, sections "Environment" and "Father notebook blueprint".
-6. `investigations/common/forensics.py` — the helpers you must reuse.
-7. `investigations/father/investigation.ipynb` — Sections 0–2, for style and for the variables
-   already bound.
+6. `investigations/common/forensics.py` and `investigations/common/prepare.py`.
+7. `investigations/father/investigation.ipynb` — Sections 0–3, for style and bound variables.
 
-## Task: build Section 3 of the notebook, replacing its placeholder markdown
+## Task: build Section 4 of the notebook, replacing its placeholder markdown
 
-The RAM baseline is already prepared: `investigation/prepared/raw/*.json` holds banners, pslist,
-psaux, pstree, proc.Maps, lsof, sockstat, lsmod and kmsg. Load those with `fx.load_vol` instead of
-re-running vol3. Only plugins absent from that set are run inline with `fx.sh`.
+Deletion recovery. What the evidence already establishes, with its source — use these, and take
+nothing from the scenario definition:
 
-Useful pivots already established by the evidence, with their sources — use these, do not invent
-others and do not take anything from the scenario definition:
+- The journal lines recovered in 2.3 name a path that was written and is no longer present:
+  `/tmp/rk.so`, installed to the object path at 20:45:24. That is the recovery target, and it is
+  evidence-derived, not assumed.
+- 2.5 inventoried `/tmp` and `/dev/shm`: zero deleted entries were listed.
+- The prepared `unallocated.body` holds ~33 unallocated inode records, and **every one has size 0** —
+  ext4 clears block pointers and size on unlink. Inode-level content recovery is therefore expected
+  to fail. Demonstrate that expected negative; do not skip it.
+- The SHA-256 of the object extracted from disk in 1.5 is the validation reference for any
+  recovered candidate.
+- The session window from 2.1 and the command times from 2.3 bound every time range used below.
 
-- the object path and its inode, from Section 1 (`PRELOAD_OBJECT_PATH`, `object_inode`)
-- the SHA-256 of the object extracted from disk, from 1.5
-- strings inside the object, from `investigation/output/s1-05-object-strings.txt`:
-  `AUTHENTICATE:`, `lobster`, `Enjoy the shell!`, `/proc/net/tcp`, `/tmp/silly.txt`
-- the session account and window, from 2.1; the sshd restart time, from 2.3
+First, report tool availability on this host for `photorec`, `ext4magic`, `debugfs`, `blkls` and
+`blkcalc`. `foremost` is known absent. If `photorec` is missing, say so and record block 4.4 as
+`not attempted — tool unavailable`; do not install anything and do not substitute a carver.
 
 Blocks:
 
-- **3.1** Does the image match the symbols? Show the prepared banners result.
-- **3.2** What processes existed, and how are they related? `pstree` and `psaux` from the prepared
-  JSON; bounded view.
-- **3.3** Which processes map the object found in Section 1? Filter `proc.Maps` by the object path
-  observed there, never a path you typed. Count distinct PID + path pairs, not mapping rows.
-- **3.4** Is `LD_PRELOAD` present in any process environment? Run `linux.envars` inline. A negative
-  is the expected result for a file-based preload and must be reported as a result, not a failure.
-- **3.5** Which endpoints were open at capture? Show `sockstat` and `lsof` from the prepared JSON in
-  full first, then attribute the ones belonging to the processes from 3.3. The object reads
-  `/proc/net/tcp`, so state explicitly that a connection hidden from the live host may still appear
-  in memory structures.
-- **3.6** Does memory hold shell history the disk does not? Run `linux.bash` inline for the relevant
-  PIDs. Section 2.4 found no history file on disk, so this is the cross-source test.
-- **3.7** Can the object be recovered from memory? Run `linux.elfs` with `--dump` for a mapping PID,
-  then `sha256sum` the result and compare it with the disk copy from 1.5. Equality and inequality
-  are both meaningful — a memory-reconstructed ELF need not match the on-disk file byte for byte.
-- **3.8** Are kernel-level mechanisms clean? Run `linux.malware.check_syscall`,
-  `linux.malware.modxview` and `linux.ebpf` inline, plus the prepared `lsmod` and `kmsg`. Valid zero
-  rows are a result; these negatives are the baseline the kernel scenarios are compared against.
+- **4.1** Which deleted entries survive? Run `fls -rdp` over the directories of interest, and show
+  the non-allocated rows of the prepared bodyfile. Cross-reference the unallocated inode records
+  against the session window from 2.1 — an inode whose times fall inside that window is a candidate
+  worth naming, even without a surviving filename.
+- **4.2** Can content be recovered from a candidate inode? `istat`, then `icat -r`, then `file` and
+  `sha256sum` on whatever comes out. Show the empty result when it is empty, with the byte count.
+- **4.3** Does the ext4 journal recover the target path in a bounded window? Dump the journal with
+  `debugfs`, then run `ext4magic` for `/tmp/rk.so` over a window justified by Sections 1–2. This
+  needs a read-only mount with `noload`: mount, use, unmount in the same cell, and print the mount
+  options used. If mounting requires a privilege you do not have, stop and report it.
+- **4.4** Does carving recover it? Run `prepare.py --stage disk --with-unallocated` to produce the
+  unallocated extract, carve it with `photorec` restricted to ELF, and map candidates back to
+  blocks with `blkcalc`. Validate every candidate against the 1.5 SHA-256. Note the extract is
+  multi-gigabyte; report its size before carving.
+- **4.5** State the outcome of each attempt as exactly one of: content recovered, partial content
+  recovered, metadata or name trace only, no result in examined scope, tool failure, not attempted.
+  Present them in one small table, one row per attempt, with the locator of the raw output.
 
-## Style, non-negotiable, matching Sections 0–2
+## Style, non-negotiable, matching Sections 0–3
 
 - One block = one markdown question, one short code cell, one empty markdown cell reading
   `**Interpretation.** _(to write)_`. You do **not** write interpretations; the analyst does.
 - Visible commands through `fx.sh`; bounded display via `tail=` or `fx.show`. Paths are relative to
   the case directory — the notebook has already `chdir`-ed.
 - Do **not** create `Finding` objects anywhere. Findings are written by hand in Section 6.
-- Enumerate before selecting. Never grep for a name, port or path taken from the scenario
-  definition; find it in the evidence and say where it came from.
+- A negative result is a result. Never let an empty or failed recovery read as a bug, and never
+  present absence of a trace as proof of erasure.
 - No `raise` on an expected result. Print what was found, including zero.
-- Keep each code cell under about 25 lines and each line under 100 characters. If a cell needs
-  more, it is doing two things.
+- Keep each code cell under about 25 lines and each line under 100 characters.
 
 ## Scope and endpoint
 
 Write scope: `investigations/father/investigation.ipynb` only. Do not touch `forensics.py`,
 `prepare.py`, the ICM, or the other sections.
 
-Write no tests. Verify by execution: restart the kernel, run Sections 0 through 3, and paste the
+Write no tests. Verify by execution: restart the kernel, run Sections 0 through 4, and paste the
 real output of each new block in your reply. If a block fails, paste the failure rather than
 working around it.
 
-Environment: `.venv/bin/python`; volatility is `vol3`. Expect 15–20 minutes for the inline plugins.
-Do not commit. Keep the handoff in `ai/tasks/investigation-refactor.md` to at most 12 lines.
+Environment: `.venv/bin/python`; volatility is `vol3`. Do not commit. Keep the handoff in
+`ai/tasks/investigation-refactor.md` to at most 12 lines.
