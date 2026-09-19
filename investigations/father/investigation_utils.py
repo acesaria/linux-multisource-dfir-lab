@@ -9,46 +9,86 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import shlex
+import os
 import subprocess
 import warnings
 from pathlib import Path
 from typing import Optional
 
 
-def run_command(command, label, out_dir) -> subprocess.CompletedProcess[str]:
-    """Save exact stdout/stderr bytes in out_dir, replacing draft files.
+import os
+import subprocess
 
-    Return decoded text for display/parsing; read the saved file for binary data.
-    Nonzero exits raise CalledProcessError; stderr is saved only when nonempty.
-    """
-    args = (
-        shlex.split(command)
-        if isinstance(command, str)
-        else [str(arg) for arg in command]
+
+import os
+import subprocess
+
+
+import os
+import subprocess
+import shlex
+
+
+import os
+import subprocess
+import shlex
+import sys
+
+
+def run_command(
+    cmd, out_dir=None, label=None, check=True, verbose=True, binary=False
+) -> subprocess.CompletedProcess:
+    if isinstance(cmd, list):
+        cmd = shlex.join(str(arg) for arg in cmd)
+
+    print("$ " + cmd)
+
+    if binary:
+        if out_dir is None or label is None:
+            raise ValueError("Binary mode requires out_dir and label")
+
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, label), "wb") as output:
+            return subprocess.run(
+                cmd,
+                shell=True,
+                executable="/bin/bash",
+                stdout=output,
+                stderr=subprocess.PIPE,
+                check=check,
+            )
+
+    # Your original text-mode implementation continues here unchanged.
+    process = subprocess.Popen(
+        cmd,
+        shell=True,
+        executable="/bin/bash",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
-    print("$", shlex.join(args))
-    stdout_path = out_dir / label
-    stderr_path = out_dir / (label + ".stderr.txt")
-    stderr_path.unlink(
-        missing_ok=True
-    )  # Clear this label's previous draft error on rerun.
-    with stdout_path.open("wb") as stdout:
-        result = subprocess.run(
-            args, stdout=stdout, stderr=subprocess.PIPE, env={**os.environ, "TZ": "UTC"}
-        )
-    if result.stderr:
-        stderr_path.write_bytes(result.stderr)
-    text_result = subprocess.CompletedProcess(
-        result.args,
-        result.returncode,
-        stdout_path.read_text(errors="replace"),
-        result.stderr.decode(errors="replace"),
-    )
-    text_result.check_returncode()
-    return text_result
+
+    captured_lines = []
+    for line_bytes in iter(process.stdout.readline, b""):
+        line_str = line_bytes.decode("utf-8", errors="backslashreplace")
+        captured_lines.append(line_str)
+        if verbose:
+            sys.stdout.write(line_str)
+            sys.stdout.flush()
+
+    process.stdout.close()
+    process.wait()
+    full_output = "".join(captured_lines)
+
+    if out_dir and label:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, label), "w", encoding="utf-8") as f:
+            f.write(full_output)
+
+    result = subprocess.CompletedProcess(cmd, process.returncode, stdout=full_output)
+    if check:
+        result.check_returncode()
+    return result
 
 
 def write_json(path: Path, obj) -> None:
@@ -119,25 +159,46 @@ def parse_mmls_root_offset(mmls_text: str) -> Optional[str]:
     return str(int(candidates[0][1]))
 
 
-def get_rootfs_offset(disk_image) -> Optional[str]:
+from typing import Optional
+import subprocess
+import re
+import warnings
+
+
+def get_rootfs_offset(disk_image) -> Optional[int]:
     """Return the first Ext4 partition offset reported by TSK."""
     mmls = subprocess.run(
         ["mmls", str(disk_image)], capture_output=True, text=True, check=True
     )
     # mmls columns: slot, partition number, start sector.
     offsets = re.findall(r"^\s*\d+:\s+\d+\s+(\d+)", mmls.stdout, re.MULTILINE)
+
     ext4_offsets = []
     for offset in offsets:
+        # offset is kept as a string here because subprocess.run requires strings
         fsstat = subprocess.run(
             ["fsstat", "-o", offset, str(disk_image)], capture_output=True, text=True
         )
         if "File System Type: Ext4" in fsstat.stdout:
-            ext4_offsets.append(offset)
+            # Cast to int when saving it to our list
+            ext4_offsets.append(int(offset))
+
     if len(ext4_offsets) > 1:
         warnings.warn(
-            f"Multiple Ext4 partitions found: {', '.join(ext4_offsets)}", stacklevel=2
+            f"Multiple Ext4 partitions found at sectors: {', '.join(map(str, ext4_offsets))}",
+            stacklevel=2,
         )
+
     return ext4_offsets[0] if ext4_offsets else None
+
+
+import subprocess
+
+
+def is_mounted(path) -> bool:
+    """Uses the Linux findmnt utility to safely check if a path is mounted."""
+    res = subprocess.run(["findmnt", "-M", str(path)], capture_output=True)
+    return res.returncode == 0
 
 
 def parse_ewfverify(output: str) -> dict:

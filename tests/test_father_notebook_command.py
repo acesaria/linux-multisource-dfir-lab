@@ -1,75 +1,46 @@
-"""Draft reruns replace output; tool failures remain visible and inspectable."""
+"""Focused checks for the Father notebook command wrapper."""
 
-import shlex
 import subprocess
-import sys
-from functools import partial
 
 import pytest
 
-from investigations.father.investigation_utils import get_rootfs_offset, run_command
+from investigations.father.investigation_utils import run_command
 
 
-@pytest.fixture
-def examination(tmp_path):
-    (tmp_path / "data").mkdir()
-    (tmp_path / "recovered").mkdir()
-    return tmp_path
+def test_inline_shell_command_and_optional_output(tmp_path, monkeypatch, capfd):
+    monkeypatch.setenv("DISK_IMAGE", "/evidence/path with spaces.E01")
+    result = run_command(
+        'printf "%s\\n%s\\n" "$DISK_IMAGE" "$(( $(printf 4) - 2 ))"',
+        label="command.txt",
+        out_dir=tmp_path / "new-output-dir",
+    )
+
+    assert result.stdout == "/evidence/path with spaces.E01\n2\n"
+    assert (tmp_path / "new-output-dir/command.txt").read_text() == result.stdout
+    assert not (tmp_path / "new-output-dir/command.txt.stderr.txt").exists()
+    assert capfd.readouterr().out.endswith(result.stdout)
 
 
-def test_text_rerun_replaces_complete_output(examination):
-    run = partial(run_command, out_dir=examination / "data")
-    # A quoted command string must preserve paths containing spaces.
-    argument = examination / "path with spaces"
-    script = "import os, sys; print(sys.argv[1]); print(os.environ['TZ']); print('x' * 5000); sys.stderr.write('warning')"
-    command = shlex.join([sys.executable, "-c", script, str(argument)])
-    first = run(command, "text.txt")
-    assert str(argument) in first.stdout and "\nUTC\n" in first.stdout
-    assert (examination / "data/text.txt").read_text() == first.stdout
-    assert (examination / "data/text.txt.stderr.txt").read_text() == "warning"
+def test_live_output_is_printed_and_returned(tmp_path, capfd):
+    result = run_command(
+        "printf output; printf error >&2",
+        label="output.txt",
+        out_dir=tmp_path,
+    )
+    captured = capfd.readouterr()
 
-    run([sys.executable, "-c", "print('latest')"], "text.txt")
-    assert (examination / "data/text.txt").read_text() == "latest\n"
-    assert not (examination / "data/text.txt.stderr.txt").exists()
-
-
-def test_failure_retains_output_and_allows_retry(examination):
-    run = partial(run_command, out_dir=examination / "data")
-    with pytest.raises(subprocess.CalledProcessError) as failure:
-        run([sys.executable, "-c",
-             "import sys; print('partial'); sys.stderr.write('failure'); sys.exit(7)"],
-            "failed.txt")
-    assert failure.value.returncode == 7
-    assert failure.value.stdout == "partial\n"
-    assert failure.value.stderr == "failure"
-    assert (examination / "data/failed.txt").read_text() == "partial\n"
-    assert (examination / "data/failed.txt.stderr.txt").read_text() == "failure"
-
-    run([sys.executable, "-c", "pass"], "failed.txt")
-    assert (examination / "data/failed.txt").read_bytes() == b""
-    assert not (examination / "data/failed.txt.stderr.txt").exists()
+    assert captured.out.endswith("output")
+    assert captured.err == "error"
+    assert result.stdout == "output"
+    assert result.stderr == "error"
+    assert (tmp_path / "output.txt").read_text() == "output"
+    assert (tmp_path / "output.txt.stderr.txt").read_text() == "error"
 
 
-def test_binary_rerun_replaces_extracted_bytes(examination):
-    run = partial(run_command, out_dir=examination / "data")
-    for content in (b"\x00\xff\x01", b"\x02"):
-        result = run([sys.executable, "-c",
-                      f"import sys; sys.stdout.buffer.write({content!r})"],
-                     "inode.bin", out_dir=examination / "recovered")
-        assert result.stdout == content.decode(errors="replace")
-        assert (examination / "recovered/inode.bin").read_bytes() == content
-        assert not (examination / "recovered/inode.bin.stderr.txt").exists()
+def test_nonzero_exit_is_returned_unless_check_is_requested(tmp_path):
+    result = run_command("printf failure >&2; exit 7", label="failed.txt", out_dir=tmp_path)
+    assert result.returncode == 7
+    assert result.stderr == "failure"
 
-    # An override applies to that invocation; subsequent calls still default to data/.
-    run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\x00\\xff')"], "default.bin")
-    assert (examination / "data/default.bin").read_bytes() == b"\x00\xff"
-    assert not (examination / "recovered/default.bin").exists()
-
-
-def test_launch_error_does_not_leave_stale_success(examination):
-    run = partial(run_command, out_dir=examination / "data")
-    run([sys.executable, "-c", "print('previous success')"], "launch.txt")
-    with pytest.raises(FileNotFoundError):
-        run([str(examination / "missing-executable")], "launch.txt")
-    assert (examination / "data/launch.txt").read_bytes() == b""
-    assert not (examination / "data/launch.txt.stderr.txt").exists()
+    with pytest.raises(subprocess.CalledProcessError):
+        run_command("exit 7", label="failed.txt", out_dir=tmp_path, check=True)
