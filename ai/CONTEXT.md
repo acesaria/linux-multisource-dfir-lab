@@ -44,6 +44,7 @@ inputs. There is no shared progress file or automatic scheduler.
 | Diamorphine | [diamorphine.md](tasks/diamorphine.md) |
 | BadBPF | [badbpf.md](tasks/badbpf.md) |
 | Shared provenance and repository consolidation | [runner-provenance.md](tasks/runner-provenance.md) |
+| Investigation layer refactor (staged) | [investigation-refactor.md](tasks/investigation-refactor.md) |
 
 Use [PROMPT_TEMPLATE.md](PROMPT_TEMPLATE.md) for a missing card or an explicitly
 requested delegation; [README.md](README.md) explains handoffs. Do not load

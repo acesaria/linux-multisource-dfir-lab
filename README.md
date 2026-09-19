@@ -26,8 +26,8 @@ approximately one more month of work from 10 September 2026; this supersedes the
 previous two-case September milestone as the overall completion target.
 
 Methodology is definitively approved in
-[RESULTS_PREVIEW.md](investigations/father/RESULTS_PREVIEW.md). That file is
-read-only. Its four tables are the target; example values are fictional.
+[ai/RULES.md](ai/RULES.md#investigation-results-contract). The four result
+tables are the target; example values are fictional.
 Metric-selection debate is closed. Deletion recovery is an active task, including
 journal reconstruction and targeted carving of unallocated space, integrated
 through standard commands and small notebook cells.

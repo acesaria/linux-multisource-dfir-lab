@@ -80,8 +80,8 @@ Multiple observations or tool invocations do not become multiple claims.
 
 ## Four result tables and simple counts
 
-The [approved results preview](../investigations/father/RESULTS_PREVIEW.md) is
-immutable. Its location does not select a scenario. Keep its four table layouts;
+The [Investigation results contract](#investigation-results-contract) section below is
+immutable. Keep its four table layouts;
 its example values, claims and observations are fictional, not measured data or
 a counting fixture. The six statuses above and the user's recovery scope govern
 real findings despite the preview's shorter status list and illustrative
@@ -184,6 +184,50 @@ automatic reasoning; ordinary tables, manual records and simple counting suffice
 - Run focused checks appropriate to the diff; stop when they pass. Handoff in
   at most 12 lines: checkout/revision/dirty state, artifacts, checks actually run,
   limitations, next action and exact human acceptance. Defer optional work.
+
+## Investigation implementation and delivery
+
+Decided 2026-09-19. Standing rules for every scenario's investigation layer; the staged work
+order is [investigation-refactor.md](tasks/investigation-refactor.md).
+
+**Tooling.** Forensic operations run through the documented command-line interfaces of TSK,
+Plaso and Volatility 3. Do not use pytsk3, dfVFS, plaso-as-library or the Volatility 3 Python
+API: the executed command is the citable interface, whereas re-implemented parsing would have to
+be defended instead of cited. Structured data comes from the tools' own serialisations — TSK
+bodyfile, `psort.py -o json_line`, `vol -r json`; pandas reads and renders them and holds no
+forensic logic. ForensicArtifacts-style artifact definitions are cited in the thesis, not
+integrated. Quote every value taken from the evidence before it enters a command string: a
+filename or file content inside an image is untrusted input.
+
+**Layout.** `investigations/common/forensics.py` is the single shared helper module and
+`investigations/common/prepare.py` the staged precomputation. Each
+`investigations/<scenario>/investigation.ipynb` is a TEMPLATE: generic Markdown, no run facts,
+outputs stripped. A run's human-written findings, chronology and object records live in
+`shared/experiments/<RUN_ID>/investigation/findings/findings.py` and are imported by the
+notebook; that run's prepared products, draft outputs and executed notebook snapshot live
+beside them. Changing RUN_ID must require no code edit, and interpretation never transfers
+between runs.
+
+**Precomputation.** Precompute only what is both slow and question-independent; targeted,
+question-driven commands stay visible in notebook cells. `prepared/prepare.json` records tool
+versions, exact argv, evidence hashes and hash scope, and a per-product state of `ok`, `partial`,
+`failed` or `not_attempted`. A failed extraction never presents as an empty dataset.
+
+**Judgment.** The human assigns every status, combined conclusion, corroboration classification
+and chronology row. Code counts, validates, renders and may warn; it never decides.
+
+**Tests.** Runner, orchestrator and claim/manifest code keeps its tests. The investigation layer
+gets no tests beyond the closed allowlist in the refactor card: do not create a test unless a
+card names it and the defect it prevents, do not create a new test file without authorization,
+and do not add coverage for a function you just wrote. Fixtures are literal lines copied from
+real tool output in this repository — never a synthetic disk or memory image, never fabricated
+forensic output. Verification of forensic behaviour is executing the section against real
+evidence under human review, recorded in the notebook.
+
+**Commits.** Commit only when the human asks. One coherent change per commit, imperative subject
+under about 70 characters, body only when the reason is not obvious. Commit messages, bodies and
+trailers name no assistant, model or tool: no `Co-Authored-By`, no "Generated with", no session
+links or equivalent attribution.
 
 ## Investigation results contract
 

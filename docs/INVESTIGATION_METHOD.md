@@ -1,8 +1,8 @@
 # Investigation method
 
 Methodology approved and locked by the user on 2026-09-10.
-[RESULTS_PREVIEW.md](../investigations/father/RESULTS_PREVIEW.md) is the sole
-results specification and must not be edited. Its four tables and definitions
+The [investigation results contract](../ai/RULES.md#investigation-results-contract) is
+the sole results specification and must not be edited. Its four tables and definitions
 are binding; its example values and observations are fictional.
 This document supplies execution, provenance and notebook rules, not another
 metric-selection proposal. Deletion recovery is fully in scope.

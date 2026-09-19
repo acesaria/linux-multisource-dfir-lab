@@ -93,9 +93,8 @@ alone does not establish injection. Let observed records guide source selection.
 4. Bind the scenario claims to that run and hand off the proposed first notebook
    question. Do not implement or execute notebook sections before selection.
 
-Future outputs, not existing inputs: `investigations/ptrace/RESEARCH.md`,
-`investigations/ptrace/WORKFLOW.md`, `investigations/ptrace/EXPERIMENT.md` and
-bounded provenance records there, created only as needed. A launched code task
+Future outputs, not existing inputs: bounded provenance records under `investigations/ptrace/`,
+created only as needed. A launched code task
 may edit `scenarios/ptrace_fa/` and relevant existing tests within its scope.
 This card and new run outputs in configured lab storage belong to that owner.
 Shared infrastructure, other cases, the vault and thesis are outside scope.
