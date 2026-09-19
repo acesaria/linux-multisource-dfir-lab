@@ -348,6 +348,19 @@ Review gate.
 
 ### Section 4 — Deletion recovery
 
+**Scope decision, 2026-09-19.** Content carving is excluded for Father with a stated reason: the
+deleted staging file duplicated a library that remains allocated, so bytes recovered from ~8.5 GB of
+unallocated space could not distinguish the deleted instance from the surviving one. Only name and
+metadata traces — surviving directory entries, unallocated inode records, and the ext4 journal — can
+bear on the claim. Recorded as `not attempted` with the argument, which is itself a result about the
+limits of deletion recovery.
+
+**Lesson for the remaining scenarios.** When designing ptrace, Diamorphine and BadBPF, make the
+deleted artifact something that does *not* survive elsewhere on the filesystem — a unique script or
+payload rather than a copy of an installed file — otherwise recovery is unfalsifiable by
+construction and the recovery column stays empty.
+
+
 | Block | Question | Technique | Claims |
 |---|---|---|---|
 | 4.1 | Which deleted entries survive? | `fls -rdp` on `/tmp`, `/dev/shm`; bodyfile `name_state` filter | deleted_staging_artifact |
