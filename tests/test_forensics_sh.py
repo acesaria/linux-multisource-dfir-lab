@@ -1,10 +1,10 @@
-"""Focused checks for the Father notebook command wrapper."""
+"""Focused checks for the shared command helper."""
 
 import subprocess
 
 import pytest
 
-from investigations.father.investigation_utils import run_command
+from investigations.common.forensics import sh as run_command
 
 
 def test_inline_shell_command_and_optional_output(tmp_path, monkeypatch, capfd):
