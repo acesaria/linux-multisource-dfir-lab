@@ -6,7 +6,7 @@ Revalidate their locators before reusing observations; acquired evidence and raw
 exports were preserved.
 
 Current work starts with [Father](../../investigations/father/README.md).
-The sole approved table specification is
-[RESULTS_PREVIEW.md](../../investigations/father/RESULTS_PREVIEW.md), read-only.
+The sole approved table specification is the
+[investigation results contract](../../ai/RULES.md#investigation-results-contract).
 [INVESTIGATION_METHOD.md](../INVESTIGATION_METHOD.md) supplies operational rules.
 Deletion recovery is in scope; metric selection is closed.
