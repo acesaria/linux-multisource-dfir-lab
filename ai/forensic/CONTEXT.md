@@ -6,7 +6,7 @@
 |---|---|
 | Selected task card | Active run, section, scenario claims, accepted work and write scope |
 | [RULES.md](../RULES.md) | Claim/finding distinction, six statuses, four tables, counts and review |
-| Approved preview linked from RULES | Read-only layout; examples are fictional |
+| [Results contract](../RULES.md#investigation-results-contract) | The four table layouts and metric definitions |
 | [Notebook style and iteration](../../docs/INVESTIGATION_METHOD.md#notebook-style-and-iteration) | Visible commands, minimal Python, draft-output policy |
 | Case workflow and notebook | Selected section and necessary dependencies |
 | Selected manifest, command log and acquisition sidecar | Execution basis, evidence identity, images, hashes, timing and symbols |

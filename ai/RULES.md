@@ -78,56 +78,6 @@ manually resolve the observations into one assessment per claim/source pair;
 keep failed attempts and differing observations in the supporting record.
 Multiple observations or tool invocations do not become multiple claims.
 
-## Four result tables and simple counts
-
-The [Investigation results contract](#investigation-results-contract) section below is
-immutable. Keep its four table layouts;
-its example values, claims and observations are fictional, not measured data or
-a counting fixture. The six statuses above and the user's recovery scope govern
-real findings despite the preview's shorter status list and illustrative
-recovery exclusion. Use S/P/U/N/A for the first four statuses if helpful; spell
-out `not_examined` and `tool_failure` in the existing source cells and notes.
-
-1. **Reconstructed chronology:** report absolute or relative time, observation,
-   locator/origin, interpretation and limitation. Preserve timestamp semantics,
-   uncertainty and acquisition gaps. Scenario-command time is not automatically
-   a forensic event time; acquisition time is not attack time.
-2. **Claim coverage and source support:** retain separate Static Disk, Timeline
-   and RAM columns, a reviewed combined conclusion and missing elements.
-   Applicability is an analyst judgment, never a runner-provided source rule.
-3. **Multi-source contribution:** count independently sufficient claims per
-   source, corroborated claims, jointly sufficient claims and unresolved claims.
-   Corroboration needs at least two genuinely different origins that each
-   establish the claim. Two tools parsing the same record, including a timeline
-   rendering of filesystem metadata, provide one origin. Joint sufficiency
-   requires a reviewed complementary argument when no source alone suffices;
-   two partial cells do not automatically establish it. Source totals overlap.
-4. **Explored footprint inventory:** count distinct relevant processes, sockets,
-   staging artifacts, deleted entries and persistence files where examined.
-   Keep the preview's columns; place additional object detail in supporting
-   notes. Distinguish complete/partial recovered content from metadata and
-   validate an object's role before counting it. Deduplicate process identities,
-   shared sockets, hard links and recovered copies. Counts are descriptive.
-
-Primary metric: **claim support rate = supported claims for a source / claims
-investigated for that source**. Count each claim once per source. The denominator
-is `supported + partial + unsupported`; exclude and separately report
-`not_applicable`, `not_examined` and `tool_failure`. A zero denominator is
-not calculable, not a zero support rate. Show the numerator and denominator.
-
-Use simple counts alongside the four tables for partial, unsupported,
-not-examined and tool-failure assessments; claims supported by exactly one
-source; corroborated and complementary claims; and RAM-only or disk/timeline-only
-support where useful. Unresolved claims lack accepted sufficient single-source
-or combined support; disclose pending work and do not present unfinished tables
-as final. Assess source exclusivity only over completed applicable examinations.
-
-Use claim observability, evidence-source coverage or cross-source corroboration,
-not universal accuracy, general recall or general detection rate. Precision is
-allowed only for a named technique with a complete candidate list and explicit
-matching rule, never for the whole investigation. No generic scoring engine or
-automatic reasoning; ordinary tables, manual records and simple counting suffice.
-
 ## Autonomy and review
 
 - Inspect, refactor scoped AI Markdown/code, run focused checks, prepare selected
@@ -231,91 +181,50 @@ links or equivalent attribution.
 
 ## Investigation results contract
 
-Every completed investigation produces four tables:
+Every completed investigation produces four tables, populated only from reviewed findings.
+Findings, their six fields and the six statuses are defined in
+[Findings and manual assessment](#findings-and-manual-assessment); use S/P/U/N/A for the first
+four statuses where it helps, and spell out `not_examined` and `tool_failure` in source cells and
+notes. Any source may carry relevant traces for any claim. The four layouts and the definitions
+in this section are frozen; changing them is a separate, explicit human decision.
 
-1. Reconstructed chronology.
-2. Claim Coverage and Source Support.
-3. Multi-Source Contribution.
-4. Explored Footprint Inventory.
+1. **Reconstructed chronology.** Absolute or relative time, observation, locator/origin,
+   interpretation and limitation. Preserve timestamp semantics, uncertainty and acquisition gaps.
+   Scenario-command time is not automatically a forensic event time; acquisition time is not
+   attack time.
+2. **Claim coverage and source support.** Separate Static Disk, Timeline and RAM columns, a
+   reviewed combined conclusion and the missing elements. Applicability is an analyst judgment,
+   never a runner-provided source rule.
+3. **Multi-source contribution.** Independently sufficient claims per source, corroborated
+   claims, jointly sufficient claims and unresolved claims. Corroboration needs at least two
+   genuinely different origins that each establish the claim; two tools parsing the same record —
+   including a timeline rendering of filesystem metadata — are one origin. Joint sufficiency
+   requires a reviewed complementary argument when no source alone suffices, explicitly stated;
+   two partial cells do not establish it. Source totals overlap and must not be summed as if
+   mutually exclusive. Unresolved claims have no sufficient single or combined account.
+4. **Explored footprint inventory.** Distinct relevant processes, sockets, staging artifacts,
+   deleted entries and persistence files where examined. Validate an object's role before counting
+   it, and deduplicate process identities, shared sockets, hard links and recovered copies.
+   Distinguish complete from partial recovered content and from metadata. Counts are descriptive;
+   additional object detail belongs in supporting notes.
 
-The examples previously used to design these tables are fictional and must never
-be copied as measured results.
+**Recovery outcomes** stay distinct: content recovered, partial content recovered, metadata or
+name trace only, no result in examined scope, tool failure, not attempted. Absence of evidence is
+not proof of absence, deletion or failed execution.
 
-### Findings
+**Primary metric: claim support rate = supported claims for a source / claims investigated for
+that source.** Count each claim once per source. The denominator is
+`supported + partial + unsupported`; exclude and separately report `not_applicable`,
+`not_examined` and `tool_failure`. Show numerator and denominator. A zero denominator is not
+calculable, not a zero support rate.
 
-Record findings separately from expected scenario claims.
+Use simple counts alongside the four tables: partial, unsupported, not-examined and tool-failure
+assessments; claims supported by exactly one source; corroborated and complementary claims;
+RAM-only or disk/timeline-only support where useful. Assess source exclusivity only over completed
+applicable examinations. Disclose pending work; never present an unfinished table as final.
 
-Each finding contains:
-
-- `claim_id`
-- `source`
-- `status`
-- `locator`
-- `observation`
-- `limitation`
-
-Allowed statuses are:
-
-- `supported`
-- `partial`
-- `unsupported`
-- `not_applicable`
-- `not_examined`
-- `tool_failure`
-
-`source` identifies the evidence origin, such as `disk`, `timeline`, or `ram`.
-Claims themselves are source-neutral. Any source may contain relevant traces for
-any claim.
-
-### Evidence independence
-
-Disk, timeline, and RAM remain separate result columns. A timeline rendering of
-the same underlying filesystem record is not automatically independent
-corroboration.
-
-Two tools parsing the same record do not create two independent sources.
-
-A combined conclusion is jointly sufficient only when complementary evidence from
-different origins is required and the reasoning is explicitly stated.
-
-### Recovery outcomes
-
-Distinguish among:
-
-- content recovered
-- partial content recovered
-- metadata or name trace only
-- no result in examined scope
-- tool failure
-- not attempted
-
-Do not interpret absence of evidence as proof of absence, deletion, or failed
-execution.
-
-### Metrics
-
-Use simple claim-support and observability summaries:
-
-- supported claims by source
-- partial claims by source
-- unsupported claims
-- not-examined claims
-- tool failures
-- corroborated claims
-- jointly sufficient claims
-- descriptive recovered-footprint counts
-
-Call these support or observability results. Do not call them universal accuracy,
-universal recall, or general detection rates.
-
-For a stated source and denominator:
-
-```text
-support rate =
-supported claims / claims investigated
-```
-
-Always state the denominator. Report `not_examined` separately.
-
-Do not calculate global precision unless a specific forensic technique produces a
-complete candidate list and a clear matching rule.
+Call these support or observability results — claim observability, evidence-source coverage,
+cross-source corroboration — never universal accuracy, universal recall or general detection rate.
+Precision is allowed only for a named technique with a complete candidate list and an explicit
+matching rule, never for the whole investigation. No generic scoring engine or automatic
+reasoning: ordinary tables, manual records and simple counting suffice.

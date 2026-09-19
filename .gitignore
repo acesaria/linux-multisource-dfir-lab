@@ -84,3 +84,6 @@ docs/archive/
 /.agents/
 /.codex/agents/
 .aider*
+
+# Local AI workspace outputs (not part of the codebase)
+ai/*/output/

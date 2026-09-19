@@ -15,7 +15,7 @@ the selected stage context.
 
 State one observable outcome and the endpoint of any authorized stage sequence.
 List exact existing inputs and relevant sections; label future outputs as such.
-For results, include the approved preview linked from `ai/RULES.md` read-only.
+For results, point at the results contract in `ai/RULES.md`; do not restate it.
 
 ## Scenario claims
 
