@@ -5,79 +5,90 @@ between tasks; ignore any memory of earlier versions.
 
 ---
 
-This is a **research** task under `ai/research/CONTEXT.md`. You produce one document. You do not
-touch the notebook, you do not run forensic tools, and you do not modify any code.
-
 Read, in this order, and nothing else:
 
 1. `AGENTS.md`
-2. `ai/CONTEXT.md` — routing. You are in the Research stage.
-3. `ai/research/CONTEXT.md`
-4. `ai/RULES.md`, section "Investigation implementation and delivery".
+2. `ai/CONTEXT.md` — routing. You are in the supervised "Forensics" stage.
+3. `ai/forensic/CONTEXT.md`
+4. `ai/RULES.md`, sections "Findings and manual assessment" and
+   "Investigation implementation and delivery".
+5. `ai/research/output/ext4-recovery-tools.md` — **the specification for this task.** Its command
+   forms, exclusions and caveats are binding.
+6. `investigations/common/forensics.py`.
+7. `investigations/father/investigation.ipynb` — Sections 0–3, for style and bound variables.
 
-## Question
+## Task: build Section 4 of the notebook, replacing its placeholder markdown
 
-Which file-recovery techniques are worth attempting on **ext4**, in an offline post-mortem
-examination of an acquired disk image, for a thesis that must show both successes and honest
-failures?
+Three mechanically distinct recovery techniques, attempted in the order A → B → C from the research
+document, against the deleted target `/tmp/rk.so` (evidence-derived: named in the journal lines
+recovered in 2.3, installed to the object path at 20:45:24 and absent from the filesystem).
 
-## The concrete case these techniques must be judged against
+**Every technique must complete or fail gracefully.** Use `check=False`. A crash, timeout or parse
+error is recorded as `tool failure`, never allowed to abort the notebook, and never reported as
+evidence of erasure. That tolerance is the point of this section.
 
-- Filesystem: ext4 on Ubuntu 22.04 (cloud image), 4096-byte blocks, journal present at inode 8.
-- Evidence: an EWF (E01) acquisition of a 10 GB logical disk, examined offline. The examiner host
-  has The Sleuth Kit 4.15.0, libewf 20240506, `debugfs` 1.47.0, `ext4magic` 0.3.2, `mactime`,
-  Python 3.12. `foremost` is not installed. Mounting is possible but needs root.
-- Target: `/tmp/rk.so`, a ~32 KB shared object written at 20:45:24 UTC and unlinked at 20:46:30 UTC,
-  about 8 seconds before memory capture and 68 seconds before disk imaging began.
-- Already established by examination, and these are the hard constraints:
-  - `fls -rd` over `/tmp` lists **zero** surviving deleted directory entries.
-  - The filesystem has ~33 unallocated inode records and **every one has size 0** — ext4 clears
-    block pointers and size on unlink.
-  - There are 2,065,546 free blocks, about **8.5 GB** of unallocated space.
-  - A byte-identical copy of the deleted file's content **remains allocated** elsewhere on the same
-    filesystem, so any content-only recovery cannot by itself establish the deleted path.
+Parameter bindings for this run — do not invent others:
+`FMT=ewf`, `SECTOR=512`, `OFF=227328` (already bound as `ROOT_OFFSET`), image already bound as
+`IMG`, outputs to `OUT` and `DATA`. Resolve the `/tmp` inode from the evidence.
 
-## What to produce
+### Blocks
 
-A shortlist of **three to four techniques**, each mechanically distinct — not three tools that do
-the same thing. Consider at least these families, and say for each whether it earns a place:
+- **4.1 — A, surviving metadata.** `fls -rd -p` under `/tmp`, then `ils -A -Z` over the filesystem.
+  Note in the block that `fls -r` does not descend into deleted directories, so the negative is
+  bounded to that traversal. Then pick one unallocated inode whose times fall inside the session
+  window from 2.1, run `istat` on it, and run `icat -r` on it, printing the byte count returned.
+  That demonstrates the cleared-extent limit instead of asserting it.
+- **4.2 — B, export the journal.** `istat` on inode 8 to establish the journal length, print it in
+  bytes and in 4096-byte blocks (this is `JOURNAL_BLOCKS`), then `icat` inode 8 into
+  `DATA/journal.bin`. Print the exported size. Do **not** export unallocated space.
+- **4.3 — B, read the journal with debugfs.** From the output directory, run
+  `timeout -k 5s 120s debugfs -R "logdump -O -a -n $JOURNAL_BLOCKS -f journal.bin"`, capturing
+  stdout and stderr separately. The installed 1.47.0 predates the 1.47.1 logdump loop fix, so the
+  timeout is required; report the exit status and inspect stderr even on exit 0. Do not add `-S`,
+  `-b` or `-i` to this standalone form. Then search the index and the exported journal bytes for
+  the target basename and report every hit with its offset — `grep -abo` over `journal.bin` is
+  enough. A bare string hit is **not** a recovered directory record; say so in the block.
+- **4.4 — B, cross-check with the TSK journal readers.** `jls` on inode 8, and `jcat` for one
+  journal block also seen by debugfs. Compare what the two readers report for the same block.
+  TSK's journal code walks fixed legacy descriptor structures and may mis-decode modern JBD2 tags,
+  so agreement, disagreement and outright failure are all reportable outcomes. Print the comparison
+  plainly.
+- **4.5 — C, ELF carving from free space.** First report whether `photorec` exists on this host; if
+  it does not, record the technique `not attempted — tool unavailable` and skip the rest of the
+  block without installing anything. If it exists, run the scripted free-space ELF form from the
+  research document against the image directly. **Do not run `blkls`** — the export is 8.46 GB and
+  the research recommends against it. Report the candidate count and total output size, and compare
+  every candidate against the SHA-256 of the object extracted in 1.5. State that a content match
+  cannot identify the deleted path, because an identical copy remains allocated.
+- **4.6 — outcomes.** One small table, one row per technique, each outcome exactly one of: content
+  recovered, partial content recovered, metadata or name trace only, no result in examined scope,
+  tool failure, not attempted — plus the locator of the raw output for each.
 
-- directory-entry and inode enumeration (`fls -rd`, `ils`, the bodyfile)
-- whole-filesystem recovery of unallocated content (`tsk_recover -e`, and what it actually does)
-- journal-assisted recovery (`ext4magic`, `jls`/`jcat`, `debugfs logdump`, `extundelete`)
-- carving from unallocated space (`photorec`, `scalpel`, `bulk_extractor`)
-- anything else genuinely used in current Linux DFIR practice that we have missed
+### Explicitly excluded — do not run, even though some are installed
 
-For **each** technique in your shortlist, give:
+`ext4magic` (upstream discontinued; crashes reported even in targeted listing mode),
+`extundelete` (documented failures with 64bit/metadata_csum), `tsk_recover` (traverses filesystem
+objects and skips zero-size metadata — not a distinct mechanism here), `scalpel`,
+`bulk_extractor`, `foremost`. Do not install any package. Do not mount anything: none of the three
+techniques needs a mount.
 
-| Field | What it must say |
-|---|---|
-| Mechanism | What it reads and what it reconstructs — metadata, name, content, or block ranges |
-| Invocation | The exact command form against an E01 or a raw image, with the arguments that matter |
-| Requirements | Raw image or E01-aware? Mount needed? Root? How much scratch space does it write? |
-| Expected behaviour here | Given zeroed inodes, a 68-second gap, and 8.5 GB unallocated — what should happen, and why |
-| What success proves | And, precisely, what it does **not** prove |
-| What failure demonstrates | A negative result must still be worth reporting in a thesis |
-| Maintenance status | Last release or commit, whether it builds on a current Debian/Ubuntu, known breakage |
+## Style, non-negotiable, matching Sections 0–3
 
-## Rules for this research
+- One block = one markdown question, one short code cell, one empty markdown cell reading
+  `**Interpretation.** _(to write)_`. You do **not** write interpretations.
+- **Forensic output first, presentation last.** Show the tool's own output through `fx.sh` with
+  `tail=`, and use plain `print` for anything derived. Do **not** build DataFrames to display text,
+  status, sizes or scope statements. The only DataFrame in this section is the 4.6 outcomes table.
+- Paths are relative to the case directory — the notebook has already `chdir`-ed.
+- Do **not** create `Finding` objects. Findings are written by hand in Section 6.
+- No `raise` on an expected result. Print what was found, including zero and including failure.
+- Keep each code cell under about 25 lines and each line under 100 characters.
 
-- **Verify the maintenance status of every tool** and cite where you checked. Earlier attempts in
-  this project were wasted on tools that are no longer maintained and crashed. If you cannot browse
-  to confirm, mark the status `unverified` explicitly rather than guessing — an unverified claim
-  here costs the project a day.
-- Prefer techniques that need no mount, or state plainly when a read-only `noload` mount is
-  unavoidable.
-- Flag anything that would require exporting or writing multiple gigabytes, with the figure.
-- Rank the shortlist by what is most worth showing in a thesis chapter, and say why. A technique
-  that fails for an instructive, explainable reason may rank above one that succeeds trivially.
-- Cite a source for each factual claim about tool behaviour: man page, upstream documentation, or
-  repository.
+## Scope and endpoint
 
-## Output
+Write scope: `investigations/father/investigation.ipynb` only.
 
-Write `ai/research/output/ext4-recovery-tools.md`: the comparison table above, a short paragraph per
-technique, and a final recommendation of which three or four to attempt and in what order. Nothing
-else is created or modified.
-
-Then stop. The experimental trial is a separate task.
+Write no tests. Verify by execution: restart the kernel, run Sections 0 through 4, and paste the
+real output of each new block in your reply, including any failure text. Environment:
+`.venv/bin/python`. Do not commit. Keep the handoff in `ai/tasks/investigation-refactor.md` to at
+most 12 lines.
