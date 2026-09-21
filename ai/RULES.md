@@ -194,6 +194,22 @@ in this section are frozen; changing them is a separate, explicit human decision
 2. **Claim coverage and source support.** Separate Static Disk, Timeline and RAM columns, a
    reviewed combined conclusion and the missing elements. Applicability is an analyst judgment,
    never a runner-provided source rule.
+**Evidence origins.** Corroboration is judged by origin, not by tool or by column. The origins in
+this project are:
+
+1. Filesystem metadata — inode times, allocation state, directory entries. Covers `istat`, `fls`,
+   the bodyfile, `mactime`, **and Plaso `filestat`**.
+2. File content on disk — `icat`/`fcat` of an allocated file.
+3. System and application logs — syslog, journal, auth.log, wtmp/btmp, dpkg/apt — read directly or
+   through Plaso.
+4. Kernel and runtime state in memory — processes, mappings, sockets, modules.
+5. Memory-resident content — recovered ELF, heap strings, shell history from memory.
+6. Recovery artifacts — the ext4 journal, unallocated blocks.
+
+Two findings corroborate a claim when both are `supported` and they come from two different
+numbered origins, each independently sufficient. Static Disk and Timeline are usually origin 1
+twice and therefore do not corroborate each other.
+
 3. **Multi-source contribution.** Independently sufficient claims per source, corroborated
    claims, jointly sufficient claims and unresolved claims. Corroboration needs at least two
    genuinely different origins that each establish the claim; two tools parsing the same record —

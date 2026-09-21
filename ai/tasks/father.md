@@ -106,3 +106,20 @@ selection and supervised re-examination.
 Successful cleanup is the reference for an expected unlink effect; it does not
 independently establish prior existence, complete erasure or recoverability.
 Existing scenario behavioral checks remain disclosed execution context.
+
+## Claim predicates
+
+`RULES.md` requires defining what would establish a claim *before* a status is assigned. Fill this
+in before Section 6; it is analyst work, not agent work. Per claim: the observation that would make
+it `supported`, what would leave it `partial`, and which sources are `not_applicable` by nature
+rather than by outcome.
+
+| Claim | Supported when | Partial when | Not applicable for |
+|---|---|---|---|
+| preload_persistence | | | |
+| implant_timestomp | | | |
+| credential_staging | | | |
+| runtime_loading_backdoor | | | |
+| deleted_staging_artifact | | | |
+| recon_staged | | | |
+| shell_history_cleanup | | | |
