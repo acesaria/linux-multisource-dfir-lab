@@ -242,14 +242,13 @@ or memory image.
 
 ## Last handoff
 
-
-- 2026-09-19: Stage 3 completed in the primary checkout; no commit; existing dirty work preserved.
-- Rebuilt Father notebook Sections 0–1 as blocks 0.1–0.5 and 1.1–1.6.
-- Sections 2–7 placeholders remain unexecuted; the mount/UAC debris block was removed.
-- Added `Finding`, the notebook `FINDINGS` convention and JSON dumping to shared forensics helpers.
-- Deleted the Father-only helper and updated the Father README.
-- Fresh kernel executed only Sections 0–1 twice against `father-u22-20260913-01`; all blocks passed.
-- Prepared `mmls`, `fsstat`, bodyfile and `ewfverify` products were read, not regenerated.
-- Draft JSON has one disk assessment per examined claim; all statuses remain `partial` pending review.
-- Limit: same-second peers and no deleted preload-path row do not establish the timestamp anomaly's cause.
-- Next: human reviews the displayed evidence and accepts or rejects Section 1; stop before Stage 4.
+- 2026-09-21: supervised Father Section 4 replacement; primary checkout at `9e81d71`; no commit.
+- Pre-existing notebook edits preserved; Sections 0–3 and 5–7 are byte-for-byte identical as cells.
+- Replaced 4.1–4.7 with metadata, journal inode/extent recovery and PhotoRec ELF carving.
+- Fresh kernel replayed Sections 0–4 for `father-u22-20260913-01`; no cell errors.
+- Existing Section 3.8 `DEBUG=True` skip remains; Sections 5–7 were not executed.
+- Journal: five directory hits, six inode versions, 32784 recovered bytes; Section 1.5 SHA-256 matches.
+- Metadata: 33 unallocated inodes, all size 0; PhotoRec: 4196 ELF candidates, no matching SHA-256.
+- Outputs: run-local `investigation/output/section4-review-20260921.{executed.ipynb,txt}` and `s4-*`.
+- Checks: notebook schema/AST, code limits, explicit `check=False`, unchanged cells, scoped diff check.
+- Endpoint: human review of Section 4; interpretations remain blank, no findings accepted; stop here.
