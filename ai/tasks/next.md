@@ -12,80 +12,108 @@ Read, in this order, and nothing else:
 3. `ai/forensic/CONTEXT.md`
 4. `ai/RULES.md`, sections "Findings and manual assessment" and
    "Investigation implementation and delivery".
-5. `ai/research/output/ext4-recovery-tools.md` — binding specification.
-6. `investigations/common/forensics.py`.
-7. `investigations/father/investigation.ipynb` — Sections 0–4.
+5. `investigations/common/forensics.py`.
+6. `investigations/father/investigation.ipynb` — Sections 0–3 for style and bound variables, and
+   Section 4, which you are replacing.
 
-## Task: correct Section 4. Four defects, no restructuring
+## Task: replace Section 4 entirely
 
-Section 4 runs and its techniques are right. Four blocks are wrong. Change only those, keep every
-other cell as it is, and do not touch Sections 0–3 or 5–7.
+Three techniques, unchanged: surviving metadata, journal-assisted reconstruction, signature
+carving. What changes is that journal reconstruction now goes all the way to content instead of
+stopping at a string match. Delete the current Section 4 cells and write the seven blocks below.
+Do not touch Sections 0–3 or 5–7.
 
-### 4.1 — the candidate inode selection is wrong
+**KISS is the hard requirement of this task.** The previous Section 4 was rejected for being
+elaborate. Plain procedural code. No helper functions, no classes, no candidate-scoring logic, no
+DataFrames except the 4.7 table. Every code cell under 25 lines and every line under 100
+characters — a cell that needs more is doing two things. Prefer one clear `print` over a
+formatted display. Run every tool with `check=False`: a crash, timeout or parse error is recorded
+as `tool failure`, never allowed to abort the notebook, never reported as evidence of erasure.
 
-It selected `258116`, `258117`, `258122`, `258123`: all `drwx------` snap-private-tmp
-**directories**, and ran `icat -r` on one. That is meaningless for content recovery.
+Target: `/tmp/rk.so`, evidence-derived from the journal lines recovered in 2.3.
 
-Fix two things:
-- Select only **regular-file** inodes from the `ils` output (mode `644`/`755`, not `700`/`1777`).
-- Widen the window from the end of the session to **the start of disk acquisition**. The current
-  window ends at 20:46:30 and so excludes inode `74309`, whose crtime is `1789332348` = 20:45:48 —
-  the moment `write_preload` ran in the 2.3 journal lines. That inode is the interesting candidate.
+### 4.1 — do deleted directory entries survive under `/tmp`?
 
-Run `istat` and `icat -r` on the regular-file candidate and print the byte count, as now.
+`fls -rd -p` on the `/tmp` inode, showing only regular-file rows. Then `ils -A -Z` once, and print
+how many unallocated inode records exist and how many have size 0. That is the whole block: it
+establishes that ext4 clears size and the extent tree on unlink, so ordinary undelete stops here.
+No candidate selection, no `icat -r` on a directory inode.
 
-### 4.2 — unchanged
+### 4.2 — export the journal
 
-### 4.3 — the classification is wrong and the block stops one step too early
+`istat` on inode 8 for the length, then `icat` inode 8 into `investigation/data/journal.bin`.
+Print the size in bytes and in 4096-byte blocks. Unchanged from the current block; keep it minimal.
 
-`debugfs` exited 0, traversed the whole journal and reached `tag TAIL`. The message
-`logdump: short read (read 0, expected 4096) while reading journal` is logdump reading one block
-past the end of the 64 MiB export: an expected terminal condition, **not** a tool failure. Treat a
-non-empty stderr as a fact to report, never as the outcome by itself.
+### 4.3 — do old directory blocks in the journal name the file?
 
-The `grep -aboF` already returns five hits for the target basename in `journal.bin`. A string hit
-is not evidence. Add a short decode step: for each hit, read the 8 bytes **before** the name and
-unpack them as an `ext4_dir_entry_2` header — `<IHBB` giving inode, `rec_len`, `name_len`,
-`file_type` — then print inode, rec_len, name_len, file_type, name and the journal block number
-(`offset // 4096`). Also decode the entry immediately preceding it in the same block, so the
-containing directory is visible. Validate: `name_len` must equal the name's length and
-`file_type` 1 means a regular file. Print the table plainly; no DataFrame.
+`timeout -k 5s 120s debugfs -R "logdump -O -a -n <blocks> -f journal.bin"` from the data
+directory, stdout and stderr captured separately. **`logdump: short read (read 0, expected 4096)`
+is logdump reading one block past the end of the export — an expected terminal condition, not a
+failure.** Report stderr as a fact; judge the outcome by whether the traversal completed.
 
-Then compare the recovered inode number against the inodes already established in Sections 1 and 2
-and print whether it matches any of them. Do not write what that means — that is the analyst's.
+Then `grep -aboF` the target basename in `journal.bin`, and for each hit read the 8 bytes before
+the name and unpack `<IHBB` as an `ext4_dir_entry_2` header: inode, `rec_len`, `name_len`,
+`file_type`. Print inode, rec_len, name_len, file_type, name and journal block (`offset // 4096`),
+plus the entry immediately preceding it in the same block. Validate that `name_len` equals the
+name's length. Print whether the recovered inode matches any inode established in Sections 1–2.
 
-### 4.4 — the cross-check is vacuous
+### 4.4 — does the journal hold pre-unlink copies of the inode itself?
 
-It compared journal **block 0**, the journal superblock, so the matching hashes prove nothing.
-Select instead a block that the debugfs output names as a **descriptor block** — parse
-`at block N` from lines beginning `Dumping descriptor block` in the saved index, and take the first
-one. Compare `jcat` against `blkcat` for that block, and report agreement, disagreement or failure.
+The journal stores old metadata blocks, so the inode-table block holding the recovered inode is
+likely in it several times. Locate it arithmetically from the prepared `fsstat` — do not hardcode:
 
-### 4.5 — re-run PhotoRec
+```
+group        = (inode - 1) // inodes_per_group
+index        = (inode - 1) %  inodes_per_group
+fs_block     = <group's Inode Table start> + (index * inode_size) // block_size
+offset_in_bl = (index * inode_size) %  block_size
+```
 
-The previous run used PhotoRec 7.1 without libewf support, hence
-`Unable to open file or device`. A newer build is now installed: print `photorec --version` first.
-The partition number `1` was guessed — run PhotoRec's listing for the image and take the number it
-displays for the ext4 partition; do not assume, and do not substitute the TSK sector offset. If it
-still cannot open the E01, record `tool failure` with the exact message and stop; do not convert
-the image and do not run `blkls`.
+`inodes_per_group`, `Inode Size` and `Block Size` are in the prepared fsstat output; the group's
+`Inode Table: START - END` is in that group's section. Find every
+`FS block <fs_block> logged at journal block N` in the logdump index, read each of those journal
+blocks at `offset_in_bl`, and decode the 256-byte inode: `<HHI` at 0 for mode, uid, size_lo;
+`<IIII` at 8 for atime, ctime, mtime, dtime; `<H` at 26 for links_count; `<HHHH` at 40 for the
+extent header (magic must be `0xF30A`, depth 0), then `<IHBBI`-style entries at 52 + 12*k as
+`<IHHI` giving logical block, length, start_hi, start_lo. An `ee_len` above 32768 marks an
+uninitialized extent: subtract 32768 for the true length.
 
-### 4.6 — re-derive the outcomes table
+**Print every distinct version**, deduplicated, oldest journal block first: mode, size, links,
+mtime, dtime, extent list, and how many copies carry it. The sequence of versions is the point —
+do not filter to one. Keep the whole block under 25 lines.
 
-From the corrected blocks. The six values are unchanged. A completed examination that found no
-usable result is `no result in examined scope`; `tool failure` is reserved for a tool that could
-not complete.
+### 4.5 — recover content from the recovered extent map
 
-## Style
+Take the version from 4.4 that has a non-zero size and a valid extent list. `blkcat` its blocks
+from the **image** (not the journal), trim to the recovered size, then `file` and `sha256sum` the
+result and compare against the SHA-256 of the object extracted in 1.5. Print both hashes and
+whether they match.
 
-Unchanged from Sections 0–3: visible commands through `fx.sh`, plain `print` for derived values,
-the 4.6 table the only DataFrame, interpretation cells left as
-`**Interpretation.** _(to write)_`, no `Finding` objects, cells under 25 lines, lines under 100
-characters.
+State in the block that the blocks may have been reallocated between unlink and imaging, so a
+mismatch is `partial content recovered` or `no result in examined scope`, and the name, size,
+timestamps and block map from 4.3–4.4 stand either way.
 
-## Scope and endpoint
+### 4.6 — signature carving from free space
+
+Print `photorec --version` first. Read the partition number from PhotoRec's own listing for the
+image; do not guess it and do not substitute the TSK sector offset. Run the scripted free-space
+ELF form with **stdout and stderr redirected to a log file** — PhotoRec's progress output floods
+the notebook otherwise. Print only: version, exit status, candidate count, total output size, and
+whether any candidate matches the 1.5 SHA-256. Never run `blkls`; never convert the image.
+
+### 4.7 — outcomes
+
+One small table, one row per technique: content recovered / partial content recovered / metadata
+or name trace only / no result in examined scope / tool failure / not attempted, with the locator
+of the raw output. `tool failure` is only for a tool that could not complete.
+
+## Style and endpoint
+
+Interpretation cells stay `**Interpretation.** _(to write)_` — you do not write them. No `Finding`
+objects; findings are written by hand in Section 6. Visible commands through `fx.sh`, plain
+`print` for derived values. Paths are relative to the case directory; the notebook has `chdir`-ed.
 
 Write scope: `investigations/father/investigation.ipynb` only. Write no tests. Restart the kernel,
-run Sections 0–4, and paste the real output of 4.1, 4.3, 4.4, 4.5 and 4.6 in your reply.
-Environment: `.venv/bin/python`. Do not commit. Keep the handoff in
-`ai/tasks/investigation-refactor.md` to at most 12 lines.
+run Sections 0–4, and paste the real output of every new block in your reply. Environment:
+`.venv/bin/python`. Do not commit. Keep the handoff in `ai/tasks/investigation-refactor.md` to at
+most 12 lines.
