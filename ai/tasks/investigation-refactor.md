@@ -36,6 +36,19 @@ stage before the previous stage's human check is recorded in `Last handoff`.
 missing `pandas`, `pytest` and `tabulate` — install them before Stage 2
 (`.venv/bin/pip install pandas pytest tabulate`).
 
+## Working split
+
+- **ac** is the analyst. Interpretations, claim predicates, status assignments and every conclusion
+  drawn from evidence are his and only his.
+- **The supervising Claude session** keeps this card and `ai/RULES.md` consistent, writes the single
+  active prompt in `ai/tasks/next.md`, and reviews what comes back — against the real files and real
+  tool output, never by reasoning from the documents. It does not implement notebook sections unless
+  asked.
+- **Codex** implements: one bounded task per prompt, verification by execution, output pasted back
+  for review, no commits.
+
+One writer per file at a time. When a decision changes, the document changes in the same turn.
+
 ## State of play
 
 Father is the reference run, `father-u22-20260913-01`, Ubuntu 22.04.
