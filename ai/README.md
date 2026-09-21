@@ -14,7 +14,7 @@ It is guidance; prepared cards do not start work or grant approval.
 | Stage contexts linked by the router | Only that stage's inputs, process and endpoint |
 | [Task cards](tasks/) | Scenario/run, section, claims, scope, checks and handoff |
 | [PROMPT_TEMPLATE.md](PROMPT_TEMPLATE.md) | A bounded task or requested delegation |
-| [Toolbox](forensic/TOOLBOX.md) | Optional forensic techniques and references |
+| [Toolbox](../docs/linux-dfir-toolbox.md) | Optional forensic techniques and references |
 | [Investigation results contract](RULES.md#investigation-results-contract) | Immutable four-table layout; metric requirements |
 | [Implementation and delivery](RULES.md#investigation-implementation-and-delivery) | Tooling, layout, precomputation, judgment, tests, commit style |
 | [Investigation method](../docs/INVESTIGATION_METHOD.md) | Notebook/operational detail, subject to current RULES |

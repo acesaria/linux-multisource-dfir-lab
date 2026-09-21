@@ -85,5 +85,4 @@ docs/archive/
 /.codex/agents/
 .aider*
 
-# Local AI workspace outputs (not part of the codebase)
-ai/*/output/
+# AI workspace outputs are tracked: research documents become specifications

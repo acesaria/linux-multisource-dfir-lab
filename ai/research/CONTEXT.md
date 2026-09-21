@@ -10,7 +10,7 @@ Research techniques, comparable cases and compatibility under
 | Selected task card | Scenario, question, current stage and endpoint |
 | Selected runner/README and existing workflow | Behavior and assumptions; disclosed design knowledge |
 | Primary sources | Material relevant to the specific research question |
-| [Toolbox](../forensic/TOOLBOX.md) | Only the needed technique section and citations |
+| [Toolbox](../../docs/linux-dfir-toolbox.md) | Only the needed technique section and citations |
 | Approved preview linked from RULES | Table layout only when planning results |
 
 ## Process

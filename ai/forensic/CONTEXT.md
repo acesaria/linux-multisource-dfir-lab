@@ -10,7 +10,7 @@
 | [Notebook style and iteration](../../docs/INVESTIGATION_METHOD.md#notebook-style-and-iteration) | Visible commands, minimal Python, draft-output policy |
 | Case workflow and notebook | Selected section and necessary dependencies |
 | Selected manifest, command log and acquisition sidecar | Execution basis, evidence identity, images, hashes, timing and symbols |
-| [Toolbox](TOOLBOX.md) | Needed technique and its cited source only |
+| [Toolbox](../../docs/linux-dfir-toolbox.md) | Needed technique and its cited source only |
 
 ## Process
 

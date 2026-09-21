@@ -9,7 +9,7 @@ output → report facts, inferences, negative results, tool failures, and limits
 Use only within a selected forensic section against acquired evidence or
 read-only derivatives; save outputs separately. These are examiner commands,
 not instructions to add guest-side validation to a scenario. The shared
-[rules](../RULES.md) govern claims, finding statuses, counts and human review.
+[rules](../ai/RULES.md) govern claims, finding statuses, counts and human review.
 Technique groupings below do not restrict which sources can inform a claim.
 
 ## 0. Quick Start
@@ -244,7 +244,7 @@ psort.py -o dynamic -w <OUTPUT.csv> <TIMELINE.PLASO> \
 ```
 
 Record parser errors and output timezone. A disk-derived timeline is a view of
-underlying disk records. [S1][S4] Apply the independence rule in [RULES.md](../RULES.md):
+underlying disk records. [S1][S4] Apply the independence rule in [RULES.md](../ai/RULES.md):
 rendering the same record twice provides one origin; distinct records still need
 review of what each independently establishes. Keep Disk and Timeline columns.
 

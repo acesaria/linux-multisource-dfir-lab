@@ -1,54 +1,17 @@
-# Father — runner claim schema and supervised investigation
+# Father — scenario claims
 
-## Context
+Scenario: `userland_father_ldpreload`. Reference run: `father-u22-20260913-01` (Ubuntu 22.04).
 
-Scenario: `userland_father_ldpreload`; owner: current Father runner-refactor task.
-Checkout: `/home/anto/linux-multisource-dfir-lab`; stage: bounded code.
-Status: runner refactor committed; investigation in progress (Section 1 complete, pending review).
-Active notebook RUN_ID: `father-u22-20260913-01` (Ubuntu 22.04), selected in the
-notebook. Current section: Section 1 complete, pending human review.
-Read [global context](../CONTEXT.md), [rules](../RULES.md) and [code](../code/CONTEXT.md).
+**This card holds the claim definitions only.** Live status, stages, the notebook blueprint and the
+handoff are in [investigation-refactor.md](investigation-refactor.md); the active prompt is in
+[next.md](next.md). Do not track progress here.
 
-## Objective and inputs
-
-Emit exactly the seven claim objects below using only `id`, `statement`,
-`basis`, `basis_type` and `validation_limit`. Keep scenario commands, order,
-dwells, cleanup and the retained backdoor connection unchanged. No guest-side
-validation commands, compatibility reader, source hints or old-schema output.
-The user's 2026-09-13 request is captured in the seven definitions below and
-this bounded scope; no external prompt file is needed to review the implementation.
-
-- [Father runner](../../scenarios/userland_father_ldpreload/runner.py).
-- [Shared claim type](../../scenarios/command_log.py) and
-  [manifest validation/serialization](../../orchestrator/core/orchestrator.py).
-- Shared type callers: [interactive shell](../../scenarios/interactive_shell/runner.py),
-  [ptrace](../../scenarios/ptrace_fa/runner.py),
-  [Diamorphine](../../scenarios/kernel_diamorphine/runner.py) and
-  [BadBPF](../../scenarios/kernel_ebpf_badbpf/runner.py); migrate their schema only.
-- [Runtime tests](../../tests/test_scenario_runtime.py) and
-  [claim-reference tests](../../tests/test_forensic_contracts.py).
-- [Repository contract](../../README.md) and
-  [Father contract](../../scenarios/userland_father_ldpreload/README.md).
-
-## Investigation context after review
-
-The following inputs belong to a later selected forensic task under
-[forensics](../forensic/CONTEXT.md); this runner task does not execute them.
-Complete the four tables from reviewed evidence under the shared methodology.
-Deletion recovery includes bounded journal/inode reconstruction, targeted
-unallocated-space carving and an optional RAM complement.
-
-- [Investigation results contract](../RULES.md#investigation-results-contract): immutable four-table layout and metric requirements.
-- [Investigation method](../../docs/INVESTIGATION_METHOD.md): existing operational leads; current RULES supersede older claim/status wording.
-- [Notebook](../../investigations/father/investigation.ipynb) and
-  [helper](../../investigations/father/investigation_utils.py): selected section only.
-- [Active manifest](../../shared/experiments/father-u22-20260913-01/manifest.json),
-  [command log](../../shared/experiments/father-u22-20260913-01/command_log.jsonl),
-  [transcript](../../shared/experiments/father-u22-20260913-01/terminal_transcript.txt)
-  and [acquisition sidecar](../../shared/experiments/father-u22-20260913-01/dumps/acquisition.json).
-  Images named by the sidecar and existing raw exports remain read-only.
-- [Current runner](../../scenarios/userland_father_ldpreload/runner.py): design
-  and stable event IDs, never evidence of an older run's execution.
+The runner emits these seven claims into the run manifest, which is the binding copy. They are
+expected scenario effects, not forensic findings: see
+[RULES.md § Execution-derived claims](../RULES.md#execution-derived-claims). User-space hiding is
+live-system context outside this scored set; do not add installation, hiding or split-cleanup
+claims as extra rows. Timestomping here concerns the `touch -r` operation's atime/mtime effect and
+does not assert that every inode timestamp changed.
 
 ## Seven scenario claims
 
@@ -143,41 +106,3 @@ selection and supervised re-examination.
 Successful cleanup is the reference for an expected unlink effect; it does not
 independently establish prior existence, complete erasure or recoverability.
 Existing scenario behavioral checks remain disclosed execution context.
-
-## Process and write scope
-
-Runner refactor committed (`793853d`). Investigation is the active task.
-
-1. Complete notebook sections one at a time under [forensic/CONTEXT.md](../forensic/CONTEXT.md).
-2. Each section: propose → build cells → human review → accept → next.
-3. After all sections: populate the four result tables and compute metrics per
-   [RULES.md § Investigation results contract](../RULES.md#investigation-results-contract).
-
-Write scope: `investigations/father/investigation.ipynb`,
-`investigations/father/investigation_utils.py`, this card's handoff,
-and findings under `shared/experiments/father-u22-20260913-01/investigation/`.
-No runner, manifest, evidence, thesis or shared-type changes.
-
-## Current status
-
-| Section | Status |
-|---|---|
-| 0. Evidence orientation | ✅ retained draft output |
-| 1. Ordinary disk examination | ✅ complete, pending human review |
-| 2. Surrounding activity | not started |
-| 3. Memory analysis | not started |
-| 4. Deletion recovery | not started |
-| 5. Chronology | not started |
-| 6. Result tables | not started |
-| 7. Ground-truth validation | not started |
-
-## Last handoff
-
-- 2026-09-16: Section 1 consolidated into 7 blocks; libc comparison removed;
-  observation record created at `investigation/findings/section1-disk-observations.md`.
-- ICM cleaned: all broken links to deleted files (RESULTS_PREVIEW, WORKFLOW,
-  RECOVERY_NOTES, IMPLEMENTATION_CHECK) replaced with RULES.md anchors.
-- RUN_ID corrected to `father-u22-20260913-01` throughout.
-- Notebook JSON and Python syntax validated. 11 stale data files removed.
-- Stop: human review of Section 1 before starting Section 2.
-

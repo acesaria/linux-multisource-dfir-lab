@@ -113,8 +113,7 @@ Multiple observations or tool invocations do not become multiple claims.
 - Prefer fewer files/fields, clear names, flat code, small scripts and manual
   interpretation. Remove unnecessary machinery; no speculative abstraction,
   compatibility layer, strict schema framework or redundant validation.
-- For notebook/helper work, Ponytail stays off unless explicitly re-enabled.
-  Follow [Notebook style and iteration](../docs/INVESTIGATION_METHOD.md#notebook-style-and-iteration):
+- For notebook/helper work, follow [Notebook style and iteration](../docs/INVESTIGATION_METHOD.md#notebook-style-and-iteration):
   visible commands, minimal justified Python, full stdout/stderr, ordinary
   reruns replacing unaccepted draft outputs, accepted exports protected apart.
 - Each card names scenario/run (or not applicable), stage, selected notebook
