@@ -173,7 +173,10 @@ real tool output in this repository — never a synthetic disk or memory image, 
 forensic output. Verification of forensic behaviour is executing the section against real
 evidence under human review, recorded in the notebook.
 
-**Commits.** Commit only when the human asks. One coherent change per commit, imperative subject
+**Commits.** Commit only when the human asks, and **commit sparingly**. One commit per completed
+task, not per edit: ICM and documentation changes made while working on a task accumulate into that
+task's commit. A card edit, a rule clarification and a prompt update belong together, not in three
+commits. The history should read as a record of work done, not of an assistant thinking out loud. One coherent change per commit, imperative subject
 under about 70 characters, body only when the reason is not obvious. Commit messages, bodies and
 trailers name no assistant, model or tool: no `Co-Authored-By`, no "Generated with", no session
 links or equivalent attribution.
