@@ -5,82 +5,79 @@ between tasks; ignore any memory of earlier versions.
 
 ---
 
+This is a **research** task under `ai/research/CONTEXT.md`. You produce one document. You do not
+touch the notebook, you do not run forensic tools, and you do not modify any code.
+
 Read, in this order, and nothing else:
 
 1. `AGENTS.md`
-2. `ai/CONTEXT.md` — routing. You are in the supervised "Forensics" stage.
-3. `ai/forensic/CONTEXT.md`
-4. `ai/RULES.md`, sections "Findings and manual assessment" and
-   "Investigation implementation and delivery".
-5. `ai/tasks/investigation-refactor.md`, sections "Environment" and "Father notebook blueprint".
-6. `investigations/common/forensics.py`.
-7. `investigations/father/investigation.ipynb` — Sections 0–3, for style and bound variables.
+2. `ai/CONTEXT.md` — routing. You are in the Research stage.
+3. `ai/research/CONTEXT.md`
+4. `ai/RULES.md`, section "Investigation implementation and delivery".
 
-## Task: build Section 4 of the notebook, replacing its placeholder markdown
+## Question
 
-Deletion recovery, deliberately scoped to **name and metadata traces**. Content carving is
-excluded for a stated reason, not skipped — block 4.4 makes that argument explicitly.
+Which file-recovery techniques are worth attempting on **ext4**, in an offline post-mortem
+examination of an acquired disk image, for a thesis that must show both successes and honest
+failures?
 
-What the evidence already establishes, with its source. Take nothing from the scenario definition:
+## The concrete case these techniques must be judged against
 
-- The journal lines recovered in 2.3 name a path that was written and is no longer present:
-  `/tmp/rk.so`, installed to the object path at 20:45:24. Evidence-derived, not assumed.
-- 2.5 inventoried `/tmp` and `/dev/shm`: zero deleted entries listed.
-- The prepared `unallocated.body` holds ~33 unallocated inode records and **every one has size 0** —
-  ext4 clears block pointers and size on unlink.
-- The prepared `fsstat` reports 2,065,546 free blocks at 4096 bytes: roughly 8.5 GB unallocated.
-- The object still allocated at the path from Section 1 is byte-identical in content to whatever
-  `/tmp/rk.so` held, and its SHA-256 from 1.5 is on record.
-- The session window from 2.1 and the command times from 2.3 bound every time range used below.
+- Filesystem: ext4 on Ubuntu 22.04 (cloud image), 4096-byte blocks, journal present at inode 8.
+- Evidence: an EWF (E01) acquisition of a 10 GB logical disk, examined offline. The examiner host
+  has The Sleuth Kit 4.15.0, libewf 20240506, `debugfs` 1.47.0, `ext4magic` 0.3.2, `mactime`,
+  Python 3.12. `foremost` is not installed. Mounting is possible but needs root.
+- Target: `/tmp/rk.so`, a ~32 KB shared object written at 20:45:24 UTC and unlinked at 20:46:30 UTC,
+  about 8 seconds before memory capture and 68 seconds before disk imaging began.
+- Already established by examination, and these are the hard constraints:
+  - `fls -rd` over `/tmp` lists **zero** surviving deleted directory entries.
+  - The filesystem has ~33 unallocated inode records and **every one has size 0** — ext4 clears
+    block pointers and size on unlink.
+  - There are 2,065,546 free blocks, about **8.5 GB** of unallocated space.
+  - A byte-identical copy of the deleted file's content **remains allocated** elsewhere on the same
+    filesystem, so any content-only recovery cannot by itself establish the deleted path.
 
-Report tool availability on this host for `debugfs` and `ext4magic` before starting. Do not install
-anything.
+## What to produce
 
-Blocks:
+A shortlist of **three to four techniques**, each mechanically distinct — not three tools that do
+the same thing. Consider at least these families, and say for each whether it earns a place:
 
-- **4.1** Which deleted names survive? `fls -rdp` over the directories named in the logs, plus the
-  non-allocated rows of the prepared bodyfile. State the scope searched. Zero surviving names is a
-  bounded negative about those directories, never proof of erasure.
-- **4.2** What do the unallocated inode records carry? Cross-reference their times against the
-  session window from 2.1 and list any whose times fall inside it — a candidate worth naming even
-  with no surviving filename. Run `istat` on one such candidate and then `icat -r` on it, and show
-  the resulting byte count, so the size-0 consequence is demonstrated rather than asserted.
-- **4.3** Does the ext4 journal retain a name or inode for the target path? Dump the journal
-  (inode 8) with `debugfs`, report its size, then run `ext4magic` for `/tmp` over a window justified
-  by Sections 1–2. Report the **names and inodes** recovered, not file content. This needs a
-  read-only mount with `noload`: mount, use and unmount in the same cell, print the mount options,
-  and if mounting needs a privilege you do not have, stop and report that.
-- **4.4** Why content carving is not attempted. One short cell that prints, from the prepared
-  products, the free-block count and its size in bytes, and the 1.5 SHA-256 of the still-allocated
-  object. Then a markdown cell — which you DO write, because it is a methodological argument and not
-  an interpretation of evidence — stating: carving ~8.5 GB of unallocated space for bytes identical
-  to a file that remains allocated cannot distinguish the deleted instance from the surviving one,
-  so a matching carve could not establish the deleted path; the attempt is recorded as
-  `not attempted` with this reason. Do not run `blkls`, `photorec` or any carver.
-- **4.5** One small table, one row per attempt, each outcome exactly one of: content recovered,
-  partial content recovered, metadata or name trace only, no result in examined scope, tool failure,
-  not attempted — with the locator of the raw output for each.
+- directory-entry and inode enumeration (`fls -rd`, `ils`, the bodyfile)
+- whole-filesystem recovery of unallocated content (`tsk_recover -e`, and what it actually does)
+- journal-assisted recovery (`ext4magic`, `jls`/`jcat`, `debugfs logdump`, `extundelete`)
+- carving from unallocated space (`photorec`, `scalpel`, `bulk_extractor`)
+- anything else genuinely used in current Linux DFIR practice that we have missed
 
-## Style, non-negotiable, matching Sections 0–3
+For **each** technique in your shortlist, give:
 
-- One block = one markdown question, one short code cell, one empty markdown cell reading
-  `**Interpretation.** _(to write)_`. The only exception is the argument cell in 4.4.
-- Visible commands through `fx.sh`; bounded display via `tail=` or `fx.show`. Paths are relative to
-  the case directory — the notebook has already `chdir`-ed.
-- Do **not** create `Finding` objects anywhere. Findings are written by hand in Section 6.
-- A negative result is a result. Never let an empty recovery read as a bug, and never present
-  absence of a trace as proof of erasure.
-- No `raise` on an expected result. Print what was found, including zero.
-- Keep each code cell under about 25 lines and each line under 100 characters.
+| Field | What it must say |
+|---|---|
+| Mechanism | What it reads and what it reconstructs — metadata, name, content, or block ranges |
+| Invocation | The exact command form against an E01 or a raw image, with the arguments that matter |
+| Requirements | Raw image or E01-aware? Mount needed? Root? How much scratch space does it write? |
+| Expected behaviour here | Given zeroed inodes, a 68-second gap, and 8.5 GB unallocated — what should happen, and why |
+| What success proves | And, precisely, what it does **not** prove |
+| What failure demonstrates | A negative result must still be worth reporting in a thesis |
+| Maintenance status | Last release or commit, whether it builds on a current Debian/Ubuntu, known breakage |
 
-## Scope and endpoint
+## Rules for this research
 
-Write scope: `investigations/father/investigation.ipynb` only. Do not touch `forensics.py`,
-`prepare.py`, the ICM, or the other sections.
+- **Verify the maintenance status of every tool** and cite where you checked. Earlier attempts in
+  this project were wasted on tools that are no longer maintained and crashed. If you cannot browse
+  to confirm, mark the status `unverified` explicitly rather than guessing — an unverified claim
+  here costs the project a day.
+- Prefer techniques that need no mount, or state plainly when a read-only `noload` mount is
+  unavoidable.
+- Flag anything that would require exporting or writing multiple gigabytes, with the figure.
+- Rank the shortlist by what is most worth showing in a thesis chapter, and say why. A technique
+  that fails for an instructive, explainable reason may rank above one that succeeds trivially.
+- Cite a source for each factual claim about tool behaviour: man page, upstream documentation, or
+  repository.
 
-Write no tests. Verify by execution: restart the kernel, run Sections 0 through 4, and paste the
-real output of each new block in your reply. If a block fails, paste the failure rather than
-working around it.
+## Output
 
-Environment: `.venv/bin/python`. Do not commit. Keep the handoff in
-`ai/tasks/investigation-refactor.md` to at most 12 lines.
+Write `ai/research/output/ext4-recovery-tools.md`: the comparison table above, a short paragraph per
+technique, and a final recommendation of which three or four to attempt and in what order. Nothing
+else is created or modified.
+
+Then stop. The experimental trial is a separate task.
