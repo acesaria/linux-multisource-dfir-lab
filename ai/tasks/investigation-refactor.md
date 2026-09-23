@@ -38,14 +38,18 @@ missing `pandas`, `pytest` and `tabulate` — install them before Stage 2
 
 ## Working split
 
+Decided 2026-09-23 (ac); replaces the split in which Claude supervised and Codex implemented.
+
 - **ac** is the analyst. Interpretations, claim predicates, status assignments and every conclusion
-  drawn from evidence are his and only his.
-- **The supervising Claude session** keeps this card and `ai/RULES.md` consistent, writes the single
-  active prompt in `ai/tasks/next.md`, and reviews what comes back — against the real files and real
-  tool output, never by reasoning from the documents. It does not implement notebook sections unless
-  asked.
-- **Codex** implements: one bounded task per prompt, verification by execution, output pasted back
-  for review, no commits.
+  drawn from evidence belong to ac alone.
+- **Astra** (GPT Astra 6, high effort, its own Codex session) supervises: keeps this card and
+  `ai/RULES.md` consistent, writes the single active prompt in `ai/tasks/next.md`, and reviews what
+  comes back. It verifies by running read-only commands against the real files and evidence, never
+  by reasoning from the documents, and never edits `investigations/**`.
+- **Claude Code** (its own session) implements: one bounded task per prompt, verified by a
+  fresh-kernel replay, real output of every changed block pasted in the reply, the `Last handoff`
+  block replaced, no commits unless ac asks.
+- ac relays between the two sessions; neither session launches the other.
 
 One writer per file at a time. When a decision changes, the document changes in the same turn.
 
@@ -264,7 +268,7 @@ or memory image.
 - Never let an agent read `investigation.ipynb` as JSON. Extract cell sources with a script.
 - Keep `.claudeignore` blocking raw evidence from file-reading tools; use filtered bash access.
 - One stage per session. End every stage with a handoff of at most 12 lines appended below.
-- Never two agents in the same file. Stages 1–2 (Codex) and Stage 3 (Claude) are sequential.
+- Never two agents in the same file; supervisor and implementer work in turn, never at once.
 
 ## Last handoff
 
