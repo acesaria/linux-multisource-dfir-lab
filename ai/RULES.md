@@ -157,6 +157,16 @@ notebook; that run's prepared products, draft outputs and executed notebook snap
 beside them. Changing RUN_ID must require no code edit, and interpretation never transfers
 between runs.
 
+**Run directory.** Under `shared/experiments/<RUN_ID>/investigation/` (decided 2026-09-23):
+`prepared/` holds `prepare.py` products; `data/` bytes copied from allocated evidence and working
+intermediates; `recovered/` content reconstructed from deleted or volatile state — the objects a
+recovery outcome cites; `output/` command transcripts and tool logs; `findings/` human-written
+records; `results/` the four tables. Everything except `findings/` and `results/` is regenerable
+and disposable. Output names are fixed and every cell is idempotent: re-running one cell or the
+whole notebook replaces its files and its state, never adds to them. Tool scratch lives outside
+the case and is removed by the cell that created it; a tool that appends to its log gets that log
+removed first.
+
 **Precomputation.** Precompute only what is both slow and question-independent; targeted,
 question-driven commands stay visible in notebook cells. `prepared/prepare.json` records tool
 versions, exact argv, evidence hashes and hash scope, and a per-product state of `ok`, `partial`,

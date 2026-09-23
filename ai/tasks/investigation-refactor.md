@@ -58,7 +58,7 @@ Father is the reference run, `father-u22-20260913-01`, Ubuntu 22.04.
 | `investigations/common/forensics.py` | Done. Frozen — no further refactoring until Father is complete. |
 | `investigations/common/prepare.py` | Done: disk and ram stages. Timeline (Plaso) stage not written. |
 | Notebook Sections 0–3 | Built and executed. |
-| Section 4 | In progress, per the blueprint below. |
+| Section 4 | Done 2026-09-23; ac approved proceeding. Interpretation cells still to write. |
 | Sections 5–7 | Not started. Section 5 needs the Plaso stage first. |
 | Claim predicates | **Not written. Blocks Section 6.** Per claim, per source: what observation would establish it, and which sources are not applicable by nature. |
 | Distro replicas, other scenarios | Not started. |
@@ -66,7 +66,19 @@ Father is the reference run, `father-u22-20260913-01`, Ubuntu 22.04.
 Deferred until Father is complete, deliberately: `sh()` has no timeout; `prepare.json` duplicates
 evidence hashes already in `acquisition.json`; `prepare.py`'s tool inventory uses the wrong binary
 names (`foremost`, `log2timeline.py`, `psort.py`, `vol` instead of `photorec`, `log2timeline`,
-`psort`, `vol3`); the notebook's readability pass.
+`psort`, `vol3`); the full-notebook design review at the end of Father — clean code and
+understandable output (e.g. 4.7's right-aligned locator column, 2.1 printing the empty btmp's
+extraction time as "btmp begins").
+
+Divergences from the frozen decisions, accepted until Father is complete (ac, 2026-09-22):
+
+- `investigations/father/investigation.ipynb` is committed **with executed outputs** (34 cells,
+  run-specific paths, inodes and hashes), against Decision 4. Strip before the template is reused
+  for another scenario or another run.
+- Findings for this run exist as `investigation/findings/findings.json`, not the `findings.py`
+  Decision 5 requires. Section 6 has to reconcile this.
+- `.claudeignore` ends with three shell commands accidentally appended as ignore patterns
+  (`find ai -maxdepth 3 -type f | sort`, `git diff --check`, `git status --short`).
 
 Dispatch: `ai/tasks/next.md` holds the one active prompt. It is replaced between tasks.
 
@@ -83,7 +95,7 @@ remaining work is the Plaso timeline stage of `prepare.py`, which Section 5 depe
 | 3 — notebook Sections 0–1 | Done, then thinned from 643 to ~170 code lines. |
 | 4 — findings and the four tables | Not started. Findings are written by hand in Section 6, from the observations in Sections 1–5, where those variables are still bound. Code counts, validates and renders; it never decides. |
 | 5 — `prepare.py --stage timeline` | Not started. Measured on this run: default parsers, 8 min 34 s, 310,319 events — `filestat` 302,902, `syslog_traditional` 4,156, `systemd_journal` 3,156, `dpkg` 81, `utmp` 22, `apt_history` 2. `filestat` is 97.6% of the timeline and renders the same ext4 metadata TSK reads, so those rows are disk-origin under the independence rule. Three timelining warnings on `auth.log`, `kern.log`, `syslog` still need checking with `pinfo -v`. |
-| 6+ — investigation | Sections 0–3 done, 4 in progress. |
+| 6+ — investigation | Sections 0–4 done; 5 waits for Stage 5, 6 for the claim predicates. |
 
 ## Father notebook blueprint
 
@@ -104,18 +116,25 @@ Sections 1–2.
 
 **Clock reconciliation (established 2026-09-19).** Guest and runner clocks agree within ~0.4 s:
 implant crtime 20:45:24.328 vs `timestomp_implant` 20:45:24.705; implant atime 20:46:00.416 vs
-`restart_ssh` 20:46:00.809. **Open anomaly:** `/etc/ld.so.preload` carries crtime = mtime = ctime =
-20:46:32.880, i.e. 44 s after `write_preload` (20:45:48.768) and 27 ms after RAM capture ended
-(20:46:32.853). Test it (later rewrite / inode reuse / acquisition-path touch) rather than assuming
-compatibility with the scenario window; the previous Section 1 interpretation asserted compatibility
-and is wrong as written.
+`restart_ssh` 20:46:00.809. The `/etc/ld.so.preload` stamp of 20:46:32.880 — 44 s after
+`write_preload` (20:45:48.768) — was recorded here as an open anomaly. The previous Section 1
+interpretation asserted compatibility with the scenario window and is wrong as written.
 
-Working hypothesis (ac, 2026-09-19): acquisition order is RAM capture → shutdown → disk imaging, and
-the implant is loaded into every dynamically linked process, so it may rewrite its own preload entry
-during shutdown. If so the disk image records post-shutdown implant activity that the memory image
-predates, and the two sources legitimately disagree. Test it: look for a deleted older
-`/etc/ld.so.preload` inode, and for other files sharing the ~20:46:32.88 stamp. Several files sharing
-it supports a shutdown-time rewrite. Report what the evidence shows; do not assert a cause.
+**The mechanism is inode reuse (verified 2026-09-22, supervising session, against the image).**
+`ifind -n /etc/ld.so.preload` returns **inode 74252** — the same inode the journal shows as
+`/tmp/rk.so` in 4.3. `istat` on it: allocated, mode 0644, size 17, block 296191, crtime = mtime =
+ctime 20:46:32.880; `icat` returns `/lib/selinux.so.3`. Block 4.4's own version list already
+records the whole life of that inode: 32,784 B at block 338469 (mtime 20:45:12), then size 0 with
+dtime 20:46:30, then 17 B at block 296191 with mtime 20:46:32. `remove_staged_implant`
+(`rm -f -- /tmp/rk.so`) freed 74252, and the file created 2 s later took it. RAM capture
+(`virsh dump`) ran 20:46:30.996–20:46:32.853, so the re-creation is 27 ms after the guest resumed.
+This supports ac's 2026-09-19 hypothesis that the preload entry is rewritten late, and it means the
+disk copy of `/etc/ld.so.preload` is not the one `write_preload` created. Remaining for the
+analyst: locate the older, now-deleted preload inode, and check whether other files carry the
+~20:46:32.88 stamp. Report what the evidence shows; do not assert a cause.
+
+Consequence for block 4.3: its "matches Sections 1–2: True" line is printing this reuse, not
+continuity of the recovered object. Do not read it as corroboration.
 
 Follow-up for `prepare.py`: its tool inventory still names `foremost`, `log2timeline.py`, `psort.py`,
 `pinfo.py` and `vol`. On this host the binaries are `photorec`, `log2timeline`, `psort`, `pinfo` and
@@ -181,12 +200,18 @@ or parse error is recorded as `tool failure`, never as evidence of erasure.
 
 | Block | Technique | Question |
 |---|---|---|
-| 4.1 | **A — surviving metadata** | `fls -rd -p`, `ils -A -Z`, then `istat` and `icat -r` on one candidate inode. `fls -r` does not descend into deleted directories: the negative is bounded to that traversal. Demonstrates the cleared-extent limit rather than asserting it. |
-| 4.2 | **B — journal export** | `istat` inode 8 for the journal length, `icat` inode 8 into `journal.bin`. No mount, no root. |
-| 4.3 | **B — journal read** | `timeout -k 5s 120s debugfs -R "logdump -O -a -n <J> -f journal.bin"`, stdout and stderr separate. The installed 1.47.0 predates the 1.47.1 logdump loop fix, so the bound is required. Then `grep -abo` the exported journal for the target basename. A string hit is not a recovered directory record. |
-| 4.4 | **B — reader cross-check** | `jls` on inode 8, `jcat` for one block debugfs also saw. TSK walks fixed legacy descriptor structures and may mis-decode modern JBD2 tags, so agreement, disagreement and failure are all reportable. |
-| 4.5 | **C — ELF carving** | `photorec` scripted free-space ELF pass against the image directly. **Never `blkls`** — that export is 8.46 GB. A content match cannot identify the deleted path while an identical copy remains allocated. |
-| 4.6 | **Outcomes** | One table: content recovered / partial / metadata or name trace only / no result in examined scope / tool failure / not attempted, with the locator of each raw output. |
+| 4.1 | **A — surviving metadata** | `fls -rd -p` on `/tmp`, regular-file rows only; `ils -A -Z` counts of unallocated inodes and zero sizes. Shows ext4 cleared size and extents on unlink; the negative is bounded to that traversal. |
+| 4.2 | **B — journal export** | `istat` inode 8 for the length, `icat` inode 8 into `data/journal.bin`. No mount, no root. |
+| 4.3 | **B — names in the journal** | `timeout -k 5s 120s debugfs -R "logdump -O -a …"` over the export — 1.47.0 predates the 1.47.1 loop fix; the final short read is the expected end. `grep -aboF` the basename; decode each hit as `ext4_dir_entry_2` with its preceding entry. |
+| 4.4 | **B — inode versions in the journal** | Inode-table block computed from `fsstat`; every logged copy of the recovered inode decoded (mode, size, links, mtime, dtime, extents), deduplicated, oldest journal block first. |
+| 4.5 | **B — content from the old extent map** | `blkcat` the logged extent from the image, trim to the logged size, `file` and SHA-256 against Section 1.5. |
+| 4.6 | **C — free-space ELF carving** | PhotoRec scripted `freespace` ELF pass, scratch outside the case. A candidate matches when it begins with the complete 1.5 reference; its disk-relative sector range from PhotoRec's log gives filesystem blocks, and `blkstat` their allocation. ELF header length printed. **Never `blkls`** — that export is 8.46 GB. |
+| 4.7 | **Outcomes** | One table, one row per technique, with the locator of each raw output. |
+
+**Outcome rule (ac, 2026-09-23).** A technique reports `content recovered` only when the object's
+bytes come from blocks wholly unallocated at acquisition. A carve over the still-allocated `/lib`
+copy is not recovery of the deleted file. On this run both B and C recover it from blocks
+338469–338477. The earlier `jls`/`jcat` reader cross-check was dropped in the 2026-09-21 rebuild.
 
 **Excluded, do not run even where installed:** `ext4magic` (upstream discontinued 2024-09-30;
 crashes reported in targeted listing mode), `extundelete` (fails with 64bit/metadata_csum),
@@ -194,8 +219,9 @@ crashes reported in targeted listing mode), `extundelete` (fails with 64bit/meta
 `scalpel`, `bulk_extractor`, `foremost`. No mount is needed by any of the three techniques.
 
 **Lesson for the remaining scenarios.** Make the deleted artifact something that does *not* survive
-elsewhere on the filesystem — a unique script or payload, not a copy of an installed file —
-otherwise recovery is unfalsifiable by construction and the recovery column stays empty.
+elsewhere on the filesystem — a unique script or payload, not a copy of an installed file. An
+identical allocated copy makes a content match ambiguous; Father resolved it only by block location
+(4.5's extent map, 4.6's sector index and `blkstat`), and a unique artifact avoids needing to.
 
 ### Section 5 — Chronology (part 3)
 
@@ -242,13 +268,13 @@ or memory image.
 
 ## Last handoff
 
-- 2026-09-21: supervised Father Section 4 replacement; primary checkout at `9e81d71`; no commit.
-- Pre-existing notebook edits preserved; Sections 0–3 and 5–7 are byte-for-byte identical as cells.
-- Replaced 4.1–4.7 with metadata, journal inode/extent recovery and PhotoRec ELF carving.
-- Fresh kernel replayed Sections 0–4 for `father-u22-20260913-01`; no cell errors.
-- Existing Section 3.8 `DEBUG=True` skip remains; Sections 5–7 were not executed.
-- Journal: five directory hits, six inode versions, 32784 recovered bytes; Section 1.5 SHA-256 matches.
-- Metadata: 33 unallocated inodes, all size 0; PhotoRec: 4196 ELF candidates, no matching SHA-256.
-- Outputs: run-local `investigation/output/section4-review-20260921.{executed.ipynb,txt}` and `s4-*`.
-- Checks: notebook schema/AST, code limits, explicit `check=False`, unchanged cells, scoped diff check.
-- Endpoint: human review of Section 4; interpretations remain blank, no findings accepted; stop here.
+- 2026-09-23: Section 4 closed. Astra rebuilt 4.6/4.7; the supervising session reviewed it on the image
+  and, at ac's request, cleaned 4.6, fixed 4.4 and applied the run-directory rule in `ai/RULES.md`.
+- 4.6 kept Astra's design (full-reference prefix match, PhotoRec's disk-relative sector index,
+  per-block `blkstat`); only wholly unallocated prefixes count, in-image read errors fail the carve.
+- 4.4 initialises `versions` in its own cell: the committed counts had doubled (22 vs 11 journal
+  blocks for fs block 4929). 3.7 and 4.5/4.6 now write recovered content to `recovered/`.
+- ac authorised deleting all derived output: 30,249 files, 5.7 GB from `output/`, `data/`, `recovered/`.
+- Two fresh-kernel replays from empty directories: exit 0, no error cells, identical 133-file 136 MB
+  inventory (only PhotoRec's curses `console.log` differs by one byte). B and C: content recovered.
+- Next: switch roles (Astra supervises, Claude Code implements); first task Stage 5, the Plaso stage.
