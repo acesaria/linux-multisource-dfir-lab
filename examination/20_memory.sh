@@ -12,5 +12,5 @@ step M05_bash       "$V linux.bash.Bash"
 step M06_files      "$V linux.pagecache.Files"
 step M06_persistence 'grep -P "\t/(etc/(ld\.so\.preload|rc\.local|crontab)|etc/cron\.[a-z]+/.+|var/spool/cron/.+|etc/systemd/system/[^/]+\.(service|timer))\t" "$OUT/M06_files.txt"'
 step M06_tmp        'grep -P "\t/(tmp|var/tmp|dev/shm)/[^\t]+\t" "$OUT/M06_files.txt"'
-step M08_modules    "$V linux.hidden_modules.Hidden_modules"
-step M09_malfind    "$V linux.malfind.Malfind"
+step M08_modules    "$V linux.malware.hidden_modules.Hidden_modules"
+step M09_malfind    "$V linux.malware.malfind.Malfind"

@@ -31,6 +31,8 @@ RUN=shared/experiments/<run_id>
 examination/00_open.sh $RUN          # verify hashes; mount EWF + root read-only; write offset, MNT, LOOPDEV to run.env
 examination/10_disk.sh $RUN          # fixed disk sweep
 examination/20_memory.sh $RUN        # fixed memory sweep
+examination/30_timeline.sh $RUN      # default Plaso extraction, full timeline and manifest window
+examination/40_recovery.sh $RUN      # ext4magic deleted-file recovery within the manifest window
 examination/claims/<scenario>.sh $RUN   # targeted checks, one or two per claim and source
 examination/pivot.sh $RUN P01_name '<command>'   # any exploratory command, recorded
 python3 examination/metrics.py shared/experiments  # checks, then tables

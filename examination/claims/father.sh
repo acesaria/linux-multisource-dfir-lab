@@ -12,6 +12,7 @@ ramfile() { echo "mkdir -p \"\$DATA/ram/$1\"; $V linux.pagecache.Files --find $2
 
 # preload_persistence
 step C_preload_disk      'grep -F "$IMPLANT_CFG" "$MNT/etc/ld.so.preload"'
+step C_timeline_preload  'grep -F "/etc/ld.so.preload" "$OUT/T02_window.txt"'
 step C_preload_ram       "$(ramfile preload /etc/ld.so.preload) && grep -aF \"\$IMPLANT_CFG\" \"\$DATA/ram/preload\"/*.dmp"
 # implant_timestomp: mtime equals the reference mtime AND is older than the file's own creation time
 step C_timestomp_disk    'stat --printf="%n\t%y\t%w\n" "$MNT$IMPLANT" "$MNT$REF" | awk -F "\t" '\''{print; m[NR]=$2; c[NR]=$3} END{exit !(NR==2 && m[1]!="" && m[1]==m[2] && c[1]!="-" && c[1]>m[1])}'\'''
@@ -28,6 +29,7 @@ step C_runtime_ram_maps  'grep -F "$IMPLANT_CFG" "$OUT/M03_libraries.txt"'
 step C_runtime_ram_socks 'for pid in $(awk -F"\t" "\$4 ~ /selinux\.so\.3/ {print \$2}" "$OUT/M03_libraries.txt" | sort -u); do awk -F"\t" -v p=$pid "\$3==p && /ESTABLISHED/" "$OUT/M04_sockstat.txt"; done | grep .'
 # deleted_staging_artifact: a deleted name, or the implant bytes outside any allocated file
 step C_staged_disk_name  'grep -P "\t${STAGED#/}( \(realloc\))?$" "$OUT/FS02_deleted.txt"'
+step C_staged_disk_recovered 'grep -E "^${IMPLANT_SHA}[[:space:]]" "$OUT/R01_hashes.txt"'
 step C_staged_ram_name   "$V linux.pagecache.Files --find \$STAGED | grep -F \$STAGED"
 # shell_history_cleanup: only a positive trace counts (a cleanup command recovered somewhere)
 step C_history_disk      'grep -aE "history -c|unset HISTFILE|bash_history" "$OUT/FS04_authlog.txt" "$OUT/FS04_journal.txt"'
