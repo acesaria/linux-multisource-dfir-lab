@@ -12,48 +12,27 @@ The project is research infrastructure, not a production SIEM, EDR, malware
 sandbox, live-response platform, automatic detector, or automatic
 reconstruction system.
 
-## Project goal and completion
+## Project goal
 
-Explain what controlled Linux attacks can be reconstructed from acquired disk,
-timeline views and RAM, and what combining them establishes. Automation supports
-scenario execution and acquisition; forensic interpretation is manual.
+Measure which effects of controlled Linux attacks remain recoverable from acquired disk and from RAM, and what
+combining the two adds. Automation covers scenario execution and acquisition. Examination is scripted only as
+far as running named commands and recording them; scoring and interpretation are the analyst's.
+The method is in [docs/METHOD.md](docs/METHOD.md).
 
-The completion target is reviewed, reproducible results for all planned thesis
-scenarios (Father, ptrace, Diamorphine and BadBPF), using the four locked tables,
-with source locators, claim support, recovery outcomes and limitations. The thesis
-is brought to completion from that complete results package. The user estimates
-approximately one more month of work from 10 September 2026; this supersedes the
-previous two-case September milestone as the overall completion target.
+## Commands
 
-Methodology is definitively approved in
-[ai/RULES.md](ai/RULES.md#investigation-results-contract). The four result
-tables are the target; example values are fictional.
-Metric-selection debate is closed. Deletion recovery is an active task, including
-journal reconstruction and targeted carving of unallocated space, integrated
-through standard commands and small notebook cells.
+The CLI exposes `init`, `setup`, `build`, `run`, and `destroy`. `build` publishes a scenario's prebuilt
+artifact and is required before running that scenario. `run --scenario` takes one of:
 
-## Current repository surface
+- `user_ldpreload_father`
+- `user_procinj_ptracefa`
+- `kernel_lkm_diamorphine`
+- `kernel_ebpf_badbpf`
+- `interactive_shell` (benign session; used as the control run)
 
-The CLI exposes `init`, `setup`, `build`, `run`, and `destroy`. `build` publishes
-a scenario's prebuilt artifact and is required before running that scenario.
-`run` dispatches directly to one of five scenario keys:
-
-- `interactive_shell`;
-- `kernel_ebpf_badbpf`;
-- `kernel_diamorphine`;
-- `ptrace_fa`;
-- `userland_father_ldpreload`.
-
-A full run restores the prepared baseline, executes and validates the selected
-scenario, acquires memory while the VM is on, shuts the VM down, acquires disk,
-and then stops. Investigation-time tools produce only the outputs the analyst
-needs; cross-source interpretation and conclusions are human work.
-
-Fresh runs include explicit scenario claims and are recorded as `vanilla`.
-There is no runtime selector for a hardened security profile. Distro definitions exist for
-Ubuntu 22.04, Ubuntu 24.04, and Debian 13, but Ubuntu 22.04 is the current
-deep-analysis platform. Broader replication and optional scenarios must not
-delay the minimum thesis deliverables.
+A full run restores the prepared baseline, executes and validates the scenario, acquires memory while the VM is
+on, shuts the VM down, acquires disk, and stops. Distro definitions exist for Ubuntu 22.04, Ubuntu 24.04 and
+Debian 13. Runs are recorded as `vanilla`; there is no hardened profile.
 
 ## Evidence and run records
 
@@ -111,8 +90,9 @@ infra/                    libvirt/QEMU, Ansible, images, distro definitions
 orchestrator/core/        lifecycle, VM state, configuration, run paths
 orchestrator/forensics/   acquisition and investigation/verification runners
 scenarios/                explicit scenario runners and command logging
-docs/investigations/      scenario/run notebooks, accepted reports, comparative material
-shared/                   generated run evidence, exports, and local analysis
+examination/              scripts that examine one acquired run, and the metrics script
+docs/                     method, toolbox notes, references
+shared/                   generated run evidence and per-run investigation records
 ```
 
 Operational identifiers such as the `forensic-lab` CLI name, schema names, guest
@@ -134,9 +114,9 @@ Then use the repository interpreter:
 .venv/bin/python cli.py init
 .venv/bin/python cli.py setup --distro ubuntu-22.04
 .venv/bin/python cli.py build --distro ubuntu-22.04 \
-  --scenario userland_father_ldpreload
+  --scenario user_ldpreload_father
 .venv/bin/python cli.py run --distro ubuntu-22.04 \
-  --scenario userland_father_ldpreload
+  --scenario user_ldpreload_father
 ```
 
 ### Pinned image and prebuilt inputs
@@ -160,13 +140,13 @@ cp config.yaml.example config.yaml
 ./setup-venv.sh
 .venv/bin/python cli.py init
 .venv/bin/python cli.py setup --distro ubuntu-22.04
-.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario userland_father_ldpreload
-.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario ptrace_fa
-.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario kernel_diamorphine
+.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario user_ldpreload_father
+.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario user_procinj_ptracefa
+.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario kernel_lkm_diamorphine
 .venv/bin/python cli.py build --distro ubuntu-22.04 --scenario kernel_ebpf_badbpf
-.venv/bin/python cli.py run --distro ubuntu-22.04 --scenario userland_father_ldpreload
-.venv/bin/python cli.py run --distro ubuntu-22.04 --scenario ptrace_fa
-.venv/bin/python cli.py run --distro ubuntu-22.04 --scenario kernel_diamorphine
+.venv/bin/python cli.py run --distro ubuntu-22.04 --scenario user_ldpreload_father
+.venv/bin/python cli.py run --distro ubuntu-22.04 --scenario user_procinj_ptracefa
+.venv/bin/python cli.py run --distro ubuntu-22.04 --scenario kernel_lkm_diamorphine
 .venv/bin/python cli.py run --distro ubuntu-22.04 --scenario kernel_ebpf_badbpf
 # Evidence: shared/experiments/<run_id>/
 ```
@@ -184,12 +164,11 @@ sudo usermod -aG libvirt,kvm "$USER" && newgrp libvirt
 ```
 
 The alias above exists because every command in this repository — `config.yaml`'s
-`vol_bin`, the orchestrator's setup-time probe, and every investigation
-notebook's manual commands — was written against the name `vol3`, which is not
+`vol_bin`, the orchestrator's setup-time probe, and the examination
+scripts — was written against the name `vol3`, which is not
 what upstream Volatility 3 actually installs (its `pyproject.toml` defines only
 `vol` and `volshell`). Renaming every reference instead of aliasing the binary
-would touch already-written investigation notebooks for no benefit; the alias
-keeps every existing command reproducible as written.
+is not worth it; the alias keeps every command reproducible as written.
 
 Installing `libewf-dev` alongside `sleuthkit` does **not** guarantee the
 distribution's prebuilt `sleuthkit` package was itself compiled against
@@ -223,13 +202,10 @@ clone therefore starts without them, by design.
 
 ## Documentation
 
-- [Investigation method](docs/INVESTIGATION_METHOD.md) defines the current narrative-first approach.
-- [Father investigation](investigations/father/README.md) is the active unified notebook.
-- `docs/investigations/` preserves historical case records; its old metric
-  definitions do not govern new investigations.
-- [Agent entry](AGENTS.md) and [ICM routing](ai/CONTEXT.md) are tracked for local and online review.
-- `scenarios/<id>/README.md` documents each controlled treatment's behaviour.
-- Named investigation documents apply only to their cited immutable runs.
+- [docs/METHOD.md](docs/METHOD.md): what is measured and the procedure per run.
+- [AGENTS.md](AGENTS.md): the only instruction file for coding assistants.
+- `scenarios/<dir>/README.md`: each scenario's behaviour and, where written, its observables per claim.
+- [docs/linux-dfir-toolbox.md](docs/linux-dfir-toolbox.md) and [docs/ext4-recovery-tools.md](docs/ext4-recovery-tools.md): technique notes.
 
 ## Third-party components
 
@@ -247,8 +223,3 @@ never becomes the system under examination.
 
 The forensic toolchain (The Sleuth Kit, Plaso, Volatility 3, libewf, libvirt,
 QEMU) is used unmodified and is not redistributed by this repository.
-
-Previous automatic detection, matching, scoring, and reconstruction work is
-historical. Its final checkpoint is preserved by the immutable
-`automatic-reconstruction-v3-final` tag and must not be treated as the current
-architecture.
