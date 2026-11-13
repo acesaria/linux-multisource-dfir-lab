@@ -145,3 +145,21 @@ VM off:
 Omit `--no-acquire` for the established memory-while-on and disk-while-off
 acquisition. The run stops there; TSK, Plaso, and Volatility examination is
 manual. The scenario is only for an isolated disposable thesis VM.
+
+## Observables per claim
+
+What counts as supported, per source. Proposed on 13 November 2026 and pending the analyst's acceptance;
+after acceptance it changes only with a dated note. See [docs/METHOD.md](../../docs/METHOD.md).
+
+| Claim | Class | Supported on disk when | Supported in RAM when |
+|---|---|---|---|
+| `preload_persistence` | Persistence | `/etc/ld.so.preload` content names the implant path | Cached file content names the implant path |
+| `implant_timestomp` | Evasion | Implant mtime equals the reference mtime and is older than the implant's creation time | The same two facts from cached metadata; without a creation time, at most partial |
+| `credential_staging` | Credential access | Staged file is byte-identical to `/etc/shadow`, mode 0600 | Cached staged file is byte-identical to cached `/etc/shadow`, mode 0600 |
+| `runtime_loading_backdoor` | Execution | Not expected; configuration and restart records give at most partial | A process maps the implant and holds an established socket to the client address |
+| `deleted_staging_artifact` | Cleanup | A deleted name for the staged path, or the implant bytes in unallocated space tied to that path | A cached or unlinked file record for the staged path |
+| `recon_staged` | Discovery | Staged file exists and holds the reconnaissance output | Cached file holds the reconnaissance output |
+| `shell_history_cleanup` | Cleanup | A recovered record of a cleanup command | A recovered history entry of a cleanup command |
+
+`shell_history_cleanup` is expected to be unsupported in both sources by construction: the command terminal
+closes before memory capture, and the history file is never written. It is kept as an honest negative.

@@ -42,19 +42,28 @@ Thumbs.db
 
 ## ADDITIONAL
 config.yaml
-manifest.json
 shared/isf/
 *.plaso
 forensics_report.json
 
 
-shared/experiments/*
+# Per run: keep the small records in git, leave evidence and bulk outputs local
+shared/experiments/*/*
+!shared/experiments/*/manifest.json
+!shared/experiments/*/command_log.jsonl
+!shared/experiments/*/dumps/
+shared/experiments/*/dumps/*
+!shared/experiments/*/dumps/acquisition.json
+!shared/experiments/*/investigation/
+shared/experiments/*/investigation/*
+!shared/experiments/*/investigation/run.env
+!shared/experiments/*/investigation/scores.tsv
+!shared/experiments/*/investigation/notes.md
+!shared/experiments/*/investigation/outputs/
+shared/experiments/*/investigation/outputs/*
+!shared/experiments/*/investigation/outputs/_steps.tsv
 shared/baselines/
 shared/prebuilt/
-
-# Ignore generated investigation material, but retain directory traversal
-shared/investigations/**
-!shared/investigations/**/
 
 *.bak
 !scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar
