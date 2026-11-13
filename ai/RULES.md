@@ -97,9 +97,10 @@ Multiple observations or tool invocations do not become multiple claims.
   Prepare that section for review, then stop before the next. Stop for review
   before accepting claim support or any deletion interpretation; absence alone
   remains insufficient. Full-notebook replay needs a separate selected task.
-- Preserve evidence, command logs, manifests, acquired images and accepted raw
-  exports. Deleting them requires explicit human review; past document-cleanup
-  instructions are not continuing deletion authority.
+- Preserve acquisition evidence, original execution/acquisition logs and manifests,
+  and investigation artifacts frozen at final human acceptance. Deleting these
+  requires explicit human review. Draft investigation products follow the
+  run-directory rule below.
 - Do not change thesis text/final scientific conclusions, publish, push or send
   external messages without authorization. Necessary scoped integration commits
   may close an authorized temporary worktree; other commits need authorization.
@@ -115,7 +116,7 @@ Multiple observations or tool invocations do not become multiple claims.
   compatibility layer, strict schema framework or redundant validation.
 - For notebook/helper work, follow [Notebook style and iteration](../docs/INVESTIGATION_METHOD.md#notebook-style-and-iteration):
   visible commands, minimal justified Python, full stdout/stderr, ordinary
-  reruns replacing unaccepted draft outputs, accepted exports protected apart.
+  reruns replacing draft outputs, final accepted exports protected apart.
 - Each card names scenario/run (or not applicable), stage, selected notebook
   section, exact inputs, claims, write scope, checks and endpoint. Use the
   existing [template](PROMPT_TEMPLATE.md); do not create a second methodology.
@@ -161,11 +162,15 @@ between runs.
 `prepared/` holds `prepare.py` products; `data/` bytes copied from allocated evidence and working
 intermediates; `recovered/` content reconstructed from deleted or volatile state — the objects a
 recovery outcome cites; `output/` command transcripts and tool logs; `findings/` human-written
-records; `results/` the four tables. Everything except `findings/` and `results/` is regenerable
-and disposable. Output names are fixed and every cell is idempotent: re-running one cell or the
-whole notebook replaces its files and its state, never adds to them. Tool scratch lives outside
-the case and is removed by the cell that created it; a tool that appends to its log gets that log
-removed first.
+records; `results/` the four tables. During notebook development, scoped derived products may be
+replaced or removed without another approval; preserve human-written findings and results.
+Keep the current review's products and transcripts until superseded, use fixed names, and avoid
+duplicate or unnecessarily large exports. At final notebook acceptance, preserve the accepted
+snapshot and the products and transcripts it cites; later regeneration must not overwrite them.
+Acquisition evidence and original run records are always protected. Every cell and preparation
+stage is idempotent: rerunning replaces its draft files and state rather than adding to them.
+Tool scratch lives outside the case and is removed by the operation that created it; a tool
+that appends to its log gets that draft log removed first.
 
 **Precomputation.** Precompute only what is both slow and question-independent; targeted,
 question-driven commands stay visible in notebook cells. `prepared/prepare.json` records tool

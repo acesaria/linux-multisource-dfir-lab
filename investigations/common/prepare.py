@@ -6,11 +6,19 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from investigations.common.forensics import load_case, q, root_fs, sh, sha256_file
+from investigations.common.forensics import (
+    load_case,
+    load_plaso,
+    q,
+    root_fs,
+    sh,
+    sha256_file,
+)
 
 
 TOOLS = (
@@ -28,9 +36,9 @@ TOOLS = (
     "debugfs",
     "ext4magic",
     "foremost",
-    "log2timeline.py",
-    "psort.py",
-    "pinfo.py",
+    "log2timeline",
+    "psort",
+    "pinfo",
     "vol3",
     "ewfinfo",
     "fsstat",
@@ -56,7 +64,11 @@ RAM_PLUGINS = (
     ("sockstat", "linux.sockstat.Sockstat"),
     ("lsmod", "linux.lsmod.Lsmod"),
     ("kmsg", "linux.kmsg.Kmsg"),
+    ("pagecache.Files", "linux.pagecache.Files"),
+    ("psscan", "linux.psscan.PsScan"),
 )
+
+TIMELINE_PRODUCTS = ("timeline.plaso", "timeline.jsonl", "pinfo")
 
 
 def now() -> str:
@@ -117,6 +129,9 @@ def initial_record(run_id: str) -> dict[str, Any]:
             f"{name}.json": {"stage": "ram", "state": "not_attempted"}
             for name, _ in RAM_PLUGINS
         }
+    )
+    products.update(
+        {name: {"stage": "timeline", "state": "not_attempted"} for name in TIMELINE_PRODUCTS}
     )
     return {
         "run_id": run_id,
@@ -522,14 +537,250 @@ def ram_stage(
     save(record, manifest_path)
 
 
-def stage_exists(record: dict[str, Any], stage: str, with_unallocated: bool) -> bool:
+def plaso_product(
+    record: dict[str, Any],
+    manifest_path: Path,
+    run_root: Path,
+    name: str,
+    argv: list[str],
+    written: Path,
+    output: Path,
+    transcript: Path,
+) -> dict[str, Any]:
+    """Run a Plaso CLI that writes its own file; keep its stdout and stderr apart."""
+    started = now()
+    command = " ".join(q(value) for value in argv)
+    print(f"START {name}", flush=True)
+    print(f"  {command}", flush=True)
+    result = sh(command, label=transcript.name, out_dir=transcript.parent, show=False)
+    if written != output and written.exists():
+        shutil.move(written, output)
+    size = output.stat().st_size if output.exists() else 0
+    state = "ok"
+    detail = None
+    if result.returncode != 0:
+        state = "failed"
+        detail = "command returned a non-zero exit code"
+    elif not output.exists():
+        state = "failed"
+        detail = "command succeeded but wrote no output file"
+
+    product = {
+        "stage": "timeline",
+        "state": state,
+        "path": str(output.relative_to(run_root)),
+        "argv": argv,
+        "started_at": started,
+        "ended_at": now(),
+        "exit_code": result.returncode,
+        "bytes": size,
+        "stdout_path": str(transcript.relative_to(run_root)),
+    }
+    stderr_path = transcript.parent / f"{transcript.name}.stderr.txt"
+    if stderr_path.exists():
+        product["stderr_path"] = str(stderr_path.relative_to(run_root))
+    if detail:
+        product["detail"] = detail
+    record["products"][name] = product
+    record["updated_at"] = now()
+    save(record, manifest_path)
+    print(f"END   {name}: {state} (exit {result.returncode}, {size} bytes)", flush=True)
+    return product
+
+
+def pinfo_counts(text: str) -> tuple[int, dict[str, int], dict[str, int]]:
+    """Count sessions, events per parser and stored warnings in `pinfo -v` text."""
+    sessions = len(re.findall(r"^\*+ Session: \S+ \*+$", text, re.M))
+    table = re.search(
+        r"^\*+ Events generated per parser \*+\n[^\n]*\n-+\n(.*?)\n-+$", text, re.M | re.S
+    )
+    rows = re.findall(r"^\s*(\S+) : (\d+)$", table.group(1), re.M) if table else []
+    warnings: dict[str, int] = {}
+    for kind in re.findall(r"^\*+ (\w+) warning: \d+ \*+$", text, re.M):
+        warnings[kind] = warnings.get(kind, 0) + 1
+    return sessions, {parser: int(count) for parser, count in rows}, warnings
+
+
+def timeline_stage(
+    record: dict[str, Any],
+    manifest_path: Path,
+    case: Any,
+    raw_dir: Path,
+) -> None:
+    log_dir = case.output / "prepare-timeline"
+    record["stages"]["timeline"] = {
+        "started_at": now(),
+        "state": "running",
+        "evidence": "disk",
+        "log_dir": str(log_dir.relative_to(case.run_root)),
+    }
+    save(record, manifest_path)
+    hash_disk(record, manifest_path, case)
+    tools = record["tools"]
+    store = raw_dir / "timeline.plaso"
+    export = raw_dir / "timeline.jsonl"
+    pinfo = raw_dir / "pinfo.txt"
+
+    # log2timeline appends a session to an existing store and psort refuses an
+    # existing output file, so this stage's previous products and logs go first.
+    for path in (store, export, pinfo, raw_dir / "pinfo.txt.stderr.txt"):
+        path.unlink(missing_ok=True)
+    shutil.rmtree(log_dir, ignore_errors=True)
+    log_dir.mkdir(parents=True)
+
+    # log2timeline keeps its task storage beside --storage_file, so the store is
+    # written in scratch outside the case and moved in when extraction ends.
+    with tempfile.TemporaryDirectory(prefix="prepare-timeline-") as scratch:
+        scratch_store = Path(scratch) / store.name
+        argv = [
+            tools["log2timeline"]["path"] or "log2timeline",
+            "--unattended",
+            "--status_view", "none",
+            "--logfile", str(log_dir / "log2timeline.log"),
+            "--temporary_directory", scratch,
+            "--partitions", "all",
+            "--parsers", "linux",
+            "--storage_file", str(scratch_store),
+            str(case.disk_image),
+        ]
+        if tools["log2timeline"]["available"]:
+            plaso_product(
+                record,
+                manifest_path,
+                case.run_root,
+                "timeline.plaso",
+                argv,
+                scratch_store,
+                store,
+                log_dir / "log2timeline.txt",
+            )
+        else:
+            unavailable_product(
+                record,
+                manifest_path,
+                "timeline.plaso",
+                "timeline",
+                argv,
+                "required tool log2timeline is unavailable",
+            )
+
+    # The export keeps every stored event, filestat included. filestat and the
+    # TSK bodyfile render the same filesystem metadata, but the bodyfile lacks
+    # some Plaso fields, sub-second times and the non-root partitions, so any
+    # filtering happens visibly in the notebook, not here.
+    psort_argv = [
+        tools["psort"]["path"] or "psort",
+        "--unattended",
+        "--status_view", "none",
+        "--logfile", str(log_dir / "psort.log"),
+        "-a",
+        "-o", "json_line",
+        "-w", str(export),
+        str(store),
+    ]
+    pinfo_argv = [
+        tools["pinfo"]["path"] or "pinfo",
+        "-v",
+        "--logfile", str(log_dir / "pinfo.log"),
+        str(store),
+    ]
+    for name, tool, argv in (
+        ("timeline.jsonl", "psort", psort_argv),
+        ("pinfo", "pinfo", pinfo_argv),
+    ):
+        if record["products"]["timeline.plaso"]["state"] == "failed":
+            unavailable_product(
+                record, manifest_path, name, "timeline", argv, "no Plaso store was produced"
+            )
+        elif not tools[tool]["available"]:
+            unavailable_product(
+                record,
+                manifest_path,
+                name,
+                "timeline",
+                argv,
+                f"required tool {tool} is unavailable",
+            )
+        elif name == "pinfo":
+            command_product(
+                record, manifest_path, case.run_root, name, "timeline", argv, pinfo
+            )
+        else:
+            plaso_product(
+                record,
+                manifest_path,
+                case.run_root,
+                name,
+                argv,
+                export,
+                export,
+                log_dir / "psort.txt",
+            )
+
+    # Exit zero does not establish complete extraction: check the transcript and
+    # what pinfo reports about the store before calling it ok.
+    extraction = record["products"]["timeline.plaso"]
+    problems = []
+    if record["products"]["pinfo"]["state"] == "ok":
+        sessions, parsers, warnings = pinfo_counts(pinfo.read_text())
+        extraction.update(sessions=sessions, events_by_parser=parsers, warnings=warnings)
+        if sessions != 1:
+            problems.append(f"store holds {sessions} sessions")
+        if warnings:
+            problems.append(f"pinfo reports stored warnings {warnings}")
+    else:
+        problems.append("pinfo did not describe the store")
+    if extraction["state"] == "ok":
+        transcript = (case.run_root / extraction["stdout_path"]).read_text()
+        if "Processing completed.\n" not in transcript:
+            problems.append("log2timeline did not report clean completion")
+        if problems:
+            extraction["state"] = "partial"
+            extraction["detail"] = "; ".join(problems)
+
+    jsonl = record["products"]["timeline.jsonl"]
+    if jsonl["state"] == "ok":
+        try:
+            jsonl["events"] = len(load_plaso(export))
+        except ValueError as error:
+            jsonl["state"] = "failed"
+            jsonl["detail"] = f"load_plaso could not read the export: {error}"
+    if jsonl["state"] == "ok" and "events_by_parser" in extraction:
+        expected = extraction["events_by_parser"].get("Total", 0)
+        if jsonl["events"] != expected:
+            jsonl["state"] = "partial"
+            jsonl["detail"] = f"read {jsonl['events']} events, pinfo implies {expected}"
+
+    states = [record["products"][name]["state"] for name in TIMELINE_PRODUCTS]
+    stage_state = "ok" if all(state == "ok" for state in states) else "partial"
+    if all(state == "failed" for state in states):
+        stage_state = "failed"
+    record["stages"]["timeline"] = {
+        **record["stages"]["timeline"],
+        "ended_at": now(),
+        "state": stage_state,
+    }
+    record["updated_at"] = now()
+    save(record, manifest_path)
+
+
+def stage_exists(
+    record: dict[str, Any], stage: str, with_unallocated: bool, run_root: Path
+) -> bool:
+    if stage == "timeline":
+        return all(
+            record["products"].get(name, {}).get("state") in {"ok", "partial"}
+            and (run_root / record["products"][name]["path"]).is_file()
+            for name in TIMELINE_PRODUCTS
+        )
     if stage == "disk":
         names = list(DISK_PRODUCTS[:5])
         if with_unallocated:
             names.append("unallocated.dd")
     else:
         names = [f"{name}.json" for name, _ in RAM_PLUGINS]
-    return all(record["products"].get(name, {}).get("state") != "not_attempted" for name in names)
+    return all(record["products"].get(name, {}).get("state", "not_attempted") != "not_attempted"
+               for name in names)
 
 
 def print_summary(record: dict[str, Any], stage: str, manifest_path: Path) -> None:
@@ -540,9 +791,13 @@ def print_summary(record: dict[str, Any], stage: str, manifest_path: Path) -> No
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Prepare bounded disk and RAM products")
+    parser = argparse.ArgumentParser(
+        description="Prepare bounded disk, RAM and timeline products"
+    )
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--stage", required=True, choices=("disk", "ram", "all"))
+    parser.add_argument(
+        "--stage", required=True, choices=("disk", "ram", "timeline", "all")
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--with-unallocated", action="store_true")
     parser.add_argument("--isf-dir", type=Path)
@@ -564,9 +819,11 @@ def main() -> None:
     record["updated_at"] = now()
     save(record, manifest_path)
 
-    stages = ("disk", "ram") if args.stage == "all" else (args.stage,)
+    stages = ("disk", "ram", "timeline") if args.stage == "all" else (args.stage,)
     for stage in stages:
-        if not args.force and stage_exists(record, stage, args.with_unallocated):
+        if not args.force and stage_exists(
+            record, stage, args.with_unallocated, case.run_root
+        ):
             print_summary(record, stage, manifest_path)
             continue
         if stage == "disk":
@@ -577,6 +834,8 @@ def main() -> None:
                 raw_dir,
                 args.with_unallocated,
             )
+        elif stage == "timeline":
+            timeline_stage(record, manifest_path, case, raw_dir)
         else:
             selected_isf_dir = (
                 args.isf_dir.expanduser().resolve()

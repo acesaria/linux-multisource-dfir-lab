@@ -8,15 +8,18 @@ Checkout: `/home/anto/linux-multisource-dfir-lab`; branch at planning time: `mai
 Architecture decisions behind this card were taken 2026-09-19 and are summarised in §"Decisions"
 below. Read [global context](../CONTEXT.md), [rules](../RULES.md), [code](../code/CONTEXT.md).
 
-This card is the single writer contract for Stages 1–4. One writer per stage. Do not start a
-stage before the previous stage's human check is recorded in `Last handoff`.
+This card is the staged investigation contract. One writer per stage. Follow the dependency
+order authorised in `Last handoff`, not numerical order. On 2026-09-23 ac authorised Stage 5
+before Stage 4 findings/tables. On 2026-09-24 ac selected notebook Section 5 and authorised
+refreshing the full Plaso export as its prerequisite. Notebook interpretations remain deferred
+until final review. This is preparation and examination work, not forensic acceptance.
 
 ## Decisions (frozen)
 
 
 1. CLI tools only — TSK, Plaso, Volatility 3 through their documented command-line interfaces.
    No pytsk3, no dfVFS, no plaso-as-library, no volatility3-as-library. Structured output comes
-   from `psort.py -o json_line` and `vol -r json`; pandas is a reader and table renderer only.
+   from `psort -o json_line` and `vol3 -r json`; pandas is a reader and table renderer only.
 2. ForensicArtifacts / "LinuxForensics" definitions are cited in the thesis, not integrated.
 3. Precompute in `prepare.py` only what is slow AND question-independent. Every targeted command
    stays visible in a notebook cell.
@@ -32,9 +35,10 @@ stage before the previous stage's human check is recorded in `Last handoff`.
 ## Environment
 
 
-`python` and `pytest` are not on `PATH`; use `.venv/bin/python -m pytest`. The virtualenv is
-missing `pandas`, `pytest` and `tabulate` — install them before Stage 2
-(`.venv/bin/pip install pandas pytest tabulate`).
+Use `.venv/bin/python`; `pandas`, `pytest` and `tabulate` are installed (checked 2026-09-23).
+The installed Plaso CLIs are `log2timeline`, `psort` and `pinfo`, all version 20260512,
+under `/home/anto/.local/bin/`. Produce Plaso products through `prepare.py --stage timeline`;
+do not maintain a separate extraction workflow.
 
 ## Working split
 
@@ -46,9 +50,10 @@ Decided 2026-09-23 (ac); replaces the split in which Claude supervised and Codex
   `ai/RULES.md` consistent, writes the single active prompt in `ai/tasks/next.md`, and reviews what
   comes back. It verifies by running read-only commands against the real files and evidence, never
   by reasoning from the documents, and never edits `investigations/**`.
-- **Claude Code** (its own session) implements: one bounded task per prompt, verified by a
-  fresh-kernel replay, real output of every changed block pasted in the reply, the `Last handoff`
-  block replaced, no commits unless ac asks.
+- **Claude Code** (its own session) implements: one bounded task per prompt, verified against
+  real evidence. Notebook changes require a fresh-kernel replay through the authorised section;
+  a preparation-only task runs the selected CLI stage in a fresh process. Paste the relevant
+  real output in the reply, replace `Last handoff`, and make no commits unless ac asks.
 - ac relays between the two sessions; neither session launches the other.
 
 One writer per file at a time. When a decision changes, the document changes in the same turn.
@@ -60,17 +65,18 @@ Father is the reference run, `father-u22-20260913-01`, Ubuntu 22.04.
 | | Status |
 |---|---|
 | `investigations/common/forensics.py` | Done. Frozen — no further refactoring until Father is complete. |
-| `investigations/common/prepare.py` | Done: disk and ram stages. Timeline (Plaso) stage not written. |
+| `investigations/common/prepare.py` | Disk, RAM and timeline run on Father. The canonical JSONL includes `filestat`; reuse it for this run. |
 | Notebook Sections 0–3 | Built and executed. |
 | Section 4 | Done 2026-09-23; ac approved proceeding. Interpretation cells still to write. |
-| Sections 5–7 | Not started. Section 5 needs the Plaso stage first. |
-| Claim predicates | **Not written. Blocks Section 6.** Per claim, per source: what observation would establish it, and which sources are not applicable by nature. |
+| Sections 5–7 | Section 5 executed as a draft. On 2026-10-01 ac chose a simplified, manual investigation style (option 2) pending Astra's review; the semi-automated Sections 0–6 are archived in `investigations/archived/father_semi_automated_2026_10_01/`. |
+| Claim predicates | Strict element rule chosen by ac 2026-10-01; the element checklist is in [father.md](father.md#claim-predicates). ac judges each cell by hand against it. |
 | Distro replicas, other scenarios | Not started. |
 
 Deferred until Father is complete, deliberately: `sh()` has no timeout; `prepare.json` duplicates
-evidence hashes already in `acquisition.json`; `prepare.py`'s tool inventory uses the wrong binary
-names (`foremost`, `log2timeline.py`, `psort.py`, `vol` instead of `photorec`, `log2timeline`,
-`psort`, `vol3`); the full-notebook design review at the end of Father — clean code and
+evidence hashes already in `acquisition.json`; unrelated tool-inventory cleanup (`foremost`
+instead of `photorec`) and general portability. Stage 5 corrected the three Plaso inventory
+names to `log2timeline`, `psort` and `pinfo`; the inventory already used `vol3`.
+Also deferred: the full-notebook design review at the end of Father — clean code and
 understandable output (e.g. 4.7's right-aligned locator column, 2.1 printing the empty btmp's
 extraction time as "btmp begins").
 
@@ -89,7 +95,7 @@ Dispatch: `ai/tasks/next.md` holds the one active prompt. It is replaced between
 ## Stages
 
 Stages 0–3 are complete; their launch prompts are spent and live in git history. Stage 5's
-remaining work is the Plaso timeline stage of `prepare.py`, which Section 5 depends on.
+full Plaso export and notebook Section 5 exist. For this Father run, do not regenerate Plaso.
 
 | Stage | State |
 |---|---|
@@ -97,9 +103,9 @@ remaining work is the Plaso timeline stage of `prepare.py`, which Section 5 depe
 | 1 — `forensics.py` | Done. Three parser defects found and corrected against real tool output. |
 | 2 — `prepare.py` disk + ram | Done. Failure and emptiness are distinguished in `prepare.json`. |
 | 3 — notebook Sections 0–1 | Done, then thinned from 643 to ~170 code lines. |
-| 4 — findings and the four tables | Not started. Findings are written by hand in Section 6, from the observations in Sections 1–5, where those variables are still bound. Code counts, validates and renders; it never decides. |
-| 5 — `prepare.py --stage timeline` | Not started. Measured on this run: default parsers, 8 min 34 s, 310,319 events — `filestat` 302,902, `syslog_traditional` 4,156, `systemd_journal` 3,156, `dpkg` 81, `utmp` 22, `apt_history` 2. `filestat` is 97.6% of the timeline and renders the same ext4 metadata TSK reads, so those rows are disk-origin under the independence rule. Three timelining warnings on `auth.log`, `kern.log`, `syslog` still need checking with `pinfo -v`. |
-| 6+ — investigation | Sections 0–4 done; 5 waits for Stage 5, 6 for the claim predicates. |
+| 4 — findings and the four tables | Active in two checkpoints: first a source-located draft proposal and four-table preview for ac's judgment; after review, materialize human-approved findings and Section 6 rendering. Sparse observation notes are sufficient, but every claim/source status must be explicit: omission cannot mean `unsupported`. Code counts, validates and renders; it never decides. |
+| 5 — `prepare.py --stage timeline` | Implemented and run on Father. The canonical JSONL has 310,364 events, including 302,947 `filestat` (97.6%); the store is `partial` for two GZIP extraction and three syslog year-inference warnings. Reuse these products; filtering remains visible in the notebook. TSK and Plaso filesystem metadata share an origin. |
+| 6+ — investigation | Section 5 draft executed; Sections 6–7 wait. After draft results and review, first simplify the whole notebook cell by cell, including Section 5 and incremental timestamp observations; freeze reviewed sections, then separately audit deeper structural duplication, bugs and boilerplate. Keep these as separate selected tasks. |
 
 ## Father notebook blueprint
 
@@ -140,9 +146,8 @@ analyst: locate the older, now-deleted preload inode, and check whether other fi
 Consequence for block 4.3: its "matches Sections 1–2: True" line is printing this reuse, not
 continuity of the recovered object. Do not read it as corroboration.
 
-Follow-up for `prepare.py`: its tool inventory still names `foremost`, `log2timeline.py`, `psort.py`,
-`pinfo.py` and `vol`. On this host the binaries are `photorec`, `log2timeline`, `psort`, `pinfo` and
-`vol3`. Portability of tool discovery is deferred to the end of the project.
+Follow-up for `prepare.py`: the unrelated `foremost` inventory entry and general tool-discovery
+portability remain deferred.
 
 ### Section 0 — Evidence, scope, premise
 
@@ -231,10 +236,11 @@ identical allocated copy makes a content match ambiguous; Father resolved it onl
 
 | Block | Question | Technique |
 |---|---|---|
-| 5.1 | What does the filesystem say happened, in order? | `mactime -b allocated.body` scoped to the window; `unallocated.body` kept separate |
-| 5.2 | What do the log-derived records add? | Plaso filtered to the window, tagged by parser; `filestat` rows marked disk-origin |
-| 5.3 | What is the reconstructed chronology? | One table: time \| observation \| locator/origin \| interpretation \| limitation |
-| 5.4 | What does the acquisition itself contribute? | RAM 20:46:30.99–20:46:32.85 vs disk from 20:46:38; examiner-induced atimes; the preload anomaly |
+| 5.1 | What did Plaso collect, and with what limits? | `pinfo` parser inventory, product states and warnings; full `timeline.jsonl` row count and fields; no judgment from counts |
+| 5.2 | What appears around the incident before filtering? | Evidence-derived UTC window over the **full** JSONL; show bounded chronological rows with `filestat` present and report type counts. On this run `filestat` is 302,947/310,364 (97.6%). Never dump the full timeline into notebook output. |
+| 5.3 | What do non-`filestat` events add? | Visible in-notebook `data_type != 'fs:stat'` filter on the same frame; bounded log/journal/session events, parser, origin, raw line locator; pivot from earlier observations, not scenario answers. Filtering changes the view, not the preserved export. |
+| 5.4 | What does the filesystem timeline show? | Visible `TZ=UTC mactime -b allocated.body` command, bounded to the observed window; keep unallocated bodyfile separate. Inspect multiline `mactime` rendering before filtering rows. TSK and Plaso `filestat` metadata share an origin but not all fields or precision. |
+| 5.5 | How do the times fit together? | Juxtapose selected source-located events with RAM/disk acquisition intervals, the preload timestamp anomaly and Plaso year warnings. Leave the chronology interpretation and human-selected rows blank for ac after final review. |
 
 ### Section 6 — Result tables
 
@@ -267,18 +273,16 @@ or memory image.
 
 - Never let an agent read `investigation.ipynb` as JSON. Extract cell sources with a script.
 - Keep `.claudeignore` blocking raw evidence from file-reading tools; use filtered bash access.
-- One stage per session. End every stage with a handoff of at most 12 lines appended below.
+- One stage per session. End every stage by replacing `Last handoff` below, at most 12 lines.
 - Never two agents in the same file; supervisor and implementer work in turn, never at once.
 
 ## Last handoff
 
-- 2026-09-23: Section 4 closed. Astra rebuilt 4.6/4.7; the supervising session reviewed it on the image
-  and, at ac's request, cleaned 4.6, fixed 4.4 and applied the run-directory rule in `ai/RULES.md`.
-- 4.6 kept Astra's design (full-reference prefix match, PhotoRec's disk-relative sector index,
-  per-block `blkstat`); only wholly unallocated prefixes count, in-image read errors fail the carve.
-- 4.4 initialises `versions` in its own cell: the committed counts had doubled (22 vs 11 journal
-  blocks for fs block 4929). 3.7 and 4.5/4.6 now write recovered content to `recovered/`.
-- ac authorised deleting all derived output: 30,249 files, 5.7 GB from `output/`, `data/`, `recovered/`.
-- Two fresh-kernel replays from empty directories: exit 0, no error cells, identical 133-file 136 MB
-  inventory (only PhotoRec's curses `console.log` differs by one byte). B and C: content recovered.
-- Next: switch roles (Astra supervises, Claude Code implements); first task Stage 5, the Plaso stage.
+- 2026-11-06: primary checkout `main`, base `8fde9d4`, existing dirty work preserved; no commit.
+- ac authorized presentation changes to FS01 in the Father run-local `investigation/investigation.md`.
+- FS01 reduced from 108 to 64 lines: four named subsections, selected OS-release fields, one closing interpretation; duplicate root listing and repeated observations removed.
+- Quoted the mount path and added the return to the investigation directory before later relative output paths; fixed the timezone code fence.
+- Preserved recorded output values, supporting files and all report content outside FS01 byte-for-byte, including FS02 onward and the result tables.
+- Checked Bash syntax, Markdown fence balance, scoped whitespace and excerpt provenance. No forensic commands or notebook replay; existing observations were reformatted, not reacquired.
+- Output policy remains: short relevant output inline; long evidential output saved once; no separate routine setup transcripts.
+- Next: ac reviews FS01's presentation. The approved FS03 access/activity and FS04 persistence/staging reorder remains a separate task; findings remain draft.

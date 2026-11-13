@@ -44,3 +44,29 @@ def test_nonzero_exit_is_returned_unless_check_is_requested(tmp_path):
 
     with pytest.raises(subprocess.CalledProcessError):
         run_command("exit 7", label="failed.txt", out_dir=tmp_path, check=True)
+
+
+def test_findings_validation_rejects_duplicate_cell_and_unknown_status():
+    """Allowlist 5: a repeated cell or a mistyped status must not reach the counts."""
+    from investigations.common import forensics as fx
+
+    rows = [{"claim_id": "c", "source": source, "status": "supported"} for source in fx.SOURCES]
+    with pytest.raises(ValueError, match="duplicate"):
+        fx.check_findings(rows + rows[:1], ["c"])
+    with pytest.raises(ValueError, match="unknown status"):
+        fx.check_findings([{**rows[0], "status": "likely"}, *rows[1:]], ["c"])
+
+
+def test_support_rate_zero_denominator_is_not_calculable():
+    """Allowlist 6: a source with no investigated claim has no rate, not a zero rate."""
+    import pandas as pd
+
+    from investigations.common import forensics as fx
+
+    grid = pd.DataFrame({"disk": ["supported", "partial"],
+                         "timeline": ["unsupported", "unsupported"],
+                         "ram": ["not_examined", "not_examined"]})
+    rates = fx.support_rates(grid)
+    assert rates.loc["disk", "support_rate"] == "1/2"
+    assert rates.loc["timeline", "support_rate"] == "0/2"
+    assert rates.loc["ram", "support_rate"] == "not calculable"

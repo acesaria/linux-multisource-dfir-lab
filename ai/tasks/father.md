@@ -24,9 +24,8 @@ atime/mtime effect; it does not assert that every inode timestamp changed.
 The following `basis` references are run-relative stable-ID definitions. They
 resolve in the [active command log](../../shared/experiments/father-u22-20260913-01/command_log.jsonl)
 and [manifest](../../shared/experiments/father-u22-20260913-01/manifest.json).
-The manifest's legacy 11-claim array is not this seven-claim list; use these
-seven definitions for all forensic assessment. A run switch requires explicit
-selection and supervised re-examination.
+The selected run manifest contains these same seven claims; its array is the binding
+copy for this run. A run switch requires explicit selection and supervised re-examination.
 
 ```json
 [
@@ -109,17 +108,23 @@ Existing scenario behavioral checks remain disclosed execution context.
 
 ## Claim predicates
 
-`RULES.md` requires defining what would establish a claim *before* a status is assigned. Fill this
-in before Section 6; it is analyst work, not agent work. Per claim: the observation that would make
-it `supported`, what would leave it `partial`, and which sources are `not_applicable` by nature
-rather than by outcome.
+Strict element rule (ac, 2026-10-01). The analyst judges each claim/source cell by hand
+against these elements:
+- every element observed in that source gives `supported`;
+- some give `partial`;
+- none give `unsupported`.
 
-| Claim | Supported when | Partial when | Not applicable for |
-|---|---|---|---|
-| preload_persistence | | | |
-| implant_timestomp | | | |
-| credential_staging | | | |
-| runtime_loading_backdoor | | | |
-| deleted_staging_artifact | | | |
-| recon_staged | | | |
-| shell_history_cleanup | | | |
+The same elements apply to disk, timeline and RAM. The wording is a draft for ac's review. No
+source is `not_applicable` by nature: memory, logs and filesystem can each carry traces of every
+claim. A logged command is direct evidence for an *attempt* element. For an *effect* element it
+shows only the invocation.
+
+| Claim | Elements |
+|---|---|
+| preload_persistence | a file at `/etc/ld.so.preload`; its content names `/lib/selinux.so.3` |
+| implant_timestomp | object mtime equals libc's; object atime equals libc's in a post-install inode copy; mtime earlier than the object's creation |
+| credential_staging | `/tmp/__malicious_harvest` exists; mode 0600; bytes equal to `/etc/shadow` |
+| runtime_loading_backdoor | an sshd started after the configuration loads the object; a root shell it started shares its network socket (ac's provisional reading of "validated"); that socket ESTABLISHED at capture |
+| deleted_staging_artifact | `/tmp/rk.so` named in `/tmp`; its inode loses its last link; after its last read and before memory capture |
+| recon_staged | `/tmp/__malicious_recon` exists; content holds identity, kernel, OS and account output |
+| shell_history_cleanup | a history-clearing command; a history-file removal; `HISTFILE` unset (generic MITRE ATT&CK T1070.003 indicators) |

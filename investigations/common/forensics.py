@@ -32,8 +32,8 @@ class Finding:
     limitation: str
 
 
-# Notebook convention: keep the current run's draft records in FINDINGS = [].
-FINDINGS: list[Finding] = []
+STATUSES = ("supported", "partial", "unsupported", "not_applicable", "not_examined", "tool_failure")
+SOURCES = ("disk", "timeline", "ram")
 
 
 def dump_findings(findings: list[Finding], path: str | Path) -> None:
@@ -41,6 +41,90 @@ def dump_findings(findings: list[Finding], path: str | Path) -> None:
         json.dumps([asdict(finding) for finding in findings], indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def propose(elements: dict[str, bool] | None, failed: bool = False) -> str:
+    """Strict element rule (ac, 2026-10-01): every element of the claim observed in the source is
+    supported, some is partial, none is unsupported; None means the examination did not run."""
+    if failed:
+        return "tool_failure"
+    if elements is None:
+        return "not_examined"
+    seen = sum(bool(value) for value in elements.values())
+    return "supported" if seen == len(elements) else "partial" if seen else "unsupported"
+
+
+def finding(store: dict, claim_id: str, source: str, elements: dict[str, bool] | None, *,
+            origins: list[int], locator: str, observation: str, limitation: str,
+            failed: bool = False) -> dict[str, Any]:
+    """Record the proposed finding for one claim/source cell; a rerun replaces it."""
+    store[(claim_id, source)] = {
+        "claim_id": claim_id, "source": source, "status": propose(elements, failed),
+        "elements": dict(elements or {}), "origins": sorted(set(origins)),
+        "locator": locator, "observation": observation, "limitation": limitation,
+    }
+    marks = "; ".join(f"{name} {'yes' if seen else 'no'}" for name, seen in (elements or {}).items())
+    print(f"proposed {claim_id} / {source}: {store[(claim_id, source)]['status']} "
+          f"({marks or 'no examination'})")
+    return store[(claim_id, source)]
+
+
+def check_findings(rows: list[dict[str, Any]], claim_ids: list[str], complete: bool = True) -> None:
+    """Raise on an unknown claim, source or status, a duplicate cell, or (if complete) a missing
+    cell: omission never stands for a status."""
+    seen = set()
+    for row in rows:
+        key = (row["claim_id"], row["source"])
+        if row["claim_id"] not in claim_ids or row["source"] not in SOURCES:
+            raise ValueError(f"unknown cell {key}")
+        if row["status"] not in STATUSES:
+            raise ValueError(f"unknown status {row['status']!r} for {key}")
+        if key in seen:
+            raise ValueError(f"duplicate cell {key}")
+        seen.add(key)
+    missing = [(c, s) for c in claim_ids for s in SOURCES if (c, s) not in seen]
+    if complete and missing:
+        raise ValueError(f"cells without an explicit status: {missing}")
+
+
+def support_rates(grid: pd.DataFrame) -> pd.DataFrame:
+    """Per-source status counts and support rate S / (S + P + U); a zero denominator is not
+    calculable. N/A, not_examined and tool_failure stay outside the denominator."""
+    rows = []
+    for source in grid.columns:
+        n = {status: int((grid[source] == status).sum()) for status in STATUSES}
+        investigated = n["supported"] + n["partial"] + n["unsupported"]
+        rows.append({"source": source, **n, "investigated": investigated,
+                     "support_rate": f"{n['supported']}/{investigated}" if investigated
+                     else "not calculable"})
+    return pd.DataFrame(rows).set_index("source")
+
+
+def contribution(cells: pd.DataFrame, joint: dict[str, str]) -> pd.DataFrame:
+    """Table 3 counts. Corroborated: two supported sources whose origin sets are disjoint.
+    Jointly sufficient: claims the analyst argued in `joint`. Source totals overlap."""
+    supported = cells[cells["status"] == "supported"]
+    by_claim = supported.groupby("claim_id")
+    claims = list(dict.fromkeys(cells["claim_id"]))
+
+    def corroborated(group: pd.DataFrame) -> bool:
+        origin_sets = [set(origins) for origins in group["origins"]]
+        return any(a.isdisjoint(b) for i, a in enumerate(origin_sets) for b in origin_sets[i + 1:])
+
+    sources_of = {claim: set(group["source"]) for claim, group in by_claim}
+    measures = [(f"independently sufficient: {source}",
+                 sorted(supported.loc[supported["source"] == source, "claim_id"]))
+                for source in SOURCES]
+    measures += [
+        ("corroborated (disjoint origins)", [c for c, g in by_claim if corroborated(g)]),
+        ("jointly sufficient (analyst argument)", [c for c in claims if c in joint]),
+        ("unresolved", [c for c in claims if c not in sources_of and c not in joint]),
+        ("supported by exactly one source", [c for c, s in sources_of.items() if len(s) == 1]),
+        ("RAM-only support", [c for c, s in sources_of.items() if s == {"ram"}]),
+        ("disk/timeline-only support", [c for c, s in sources_of.items() if "ram" not in s]),
+    ]
+    return pd.DataFrame([{"measure": m, "count": len(c), "claims": ", ".join(c)}
+                         for m, c in measures]).set_index("measure")
 
 
 def sh(
