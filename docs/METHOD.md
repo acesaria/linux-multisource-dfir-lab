@@ -28,18 +28,18 @@ on it; the sweep's output on it is the noise level; it documents which artifacts
 
 ```bash
 RUN=shared/experiments/<run_id>
-examination/00_open.sh $RUN          # verify hashes, find root filesystem, write run.env, create scores.tsv
+examination/00_open.sh $RUN          # verify hashes; mount EWF + root read-only; write offset, MNT, LOOPDEV to run.env
 examination/10_disk.sh $RUN          # fixed disk sweep
 examination/20_memory.sh $RUN        # fixed memory sweep
 examination/claims/<scenario>.sh $RUN   # targeted checks, one or two per claim and source
 examination/pivot.sh $RUN P01_name '<command>'   # any exploratory command, recorded
 python3 examination/metrics.py shared/experiments  # checks, then tables
+examination/99_close.sh $RUN         # unmount root, detach loop, unmount EWF; safe twice
 ```
 
-Every step writes native output to `investigation/outputs/<ID>.txt`, errors to `<ID>.err`, and one row to
-`outputs/_steps.tsv` (run, step, exit status, lines, time, command). A step that finds nothing ends non-zero;
-that is a result, and across distributions it is the portability table. Step prefixes: `D`, `FS`, `T`, `M`
-are the fixed sweep; `C_` are scenario checks (exit 0 means the predicate matched); `P` are pivots.
+Each step writes native stdout/stderr to `investigation/outputs/<ID>.txt` / `<ID>.err` and one row (run, ID, rc,
+lines, time, command) to `_steps.tsv`. Non-zero findings document portability. `D`/`FS`/`T`/`M` are fixed sweeps,
+`C_` claim predicates (0 = matched), `P` pivots. Allocated files use MNT; Sleuth Kit supplies discovery, deleted names and timelines.
 
 The analyst then reads the outputs, fills `scores.tsv` (status, cited step IDs, note) and writes `notes.md`
 under five headings: deviations, what the sweep showed, pivots, unexpected, interpretation and limits.
@@ -54,8 +54,8 @@ after scoring, a row carries another run's ID, or a claim has no score.
 
 ## Limits
 
-- Sleuth Kit reads Ext2/3/4 but not XFS or Btrfs. A distribution with such a root filesystem needs another way
-  to read the disk; `00_open.sh` stops with a message.
+- Opening requires sudo, EWF/FUSE and a kernel filesystem driver; root uses a read-only loop and
+  `ro,noload,nodev,nosuid,noexec`. Discovery/deleted names/timelines still require Sleuth Kit filesystem support.
 - RAM is captured before a graceful shutdown and disk after it. Shutdown changes the disk (logs flush, the
   journal commits, a tmpfs `/tmp` is discarded). This is a design choice and shapes the disk results.
 - The stale check compares file times. Run `metrics.py` before committing, not after a fresh clone.

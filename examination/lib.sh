@@ -24,7 +24,10 @@ if [[ -f $INV/run.env ]]; then
   [[ ${ENV_RUN_ID:-} == "$RUN_ID" && ${ENV_DISK_SHA:-} == "$DISK_SHA" ]] \
     || die "investigation/run.env was derived from another run (${ENV_RUN_ID:-?}); delete it and rerun 00_open.sh"
 fi
-need_env() { [[ -n ${OFFSET:-} ]] || die "no run.env yet: run 00_open.sh first"; }
+need_env() {
+  [[ -n ${OFFSET:-} ]] || die "no run.env yet: run 00_open.sh first"
+  [[ -n ${MNT:-} ]] && mountpoint -q "$MNT" || die "evidence root is not mounted (${MNT:-unset}): run 00_open.sh first"
+}
 
 # step ID 'command'   Runs the command, keeps native stdout, stderr and exit status, logs one row.
 # rc=0 means the command (or its final grep) succeeded; a non-zero rc is a recorded result, not a crash.
@@ -34,6 +37,6 @@ step() {
   bash -o pipefail -c "$cmd" >"$OUT/$id.txt" 2>"$OUT/$id.err"; rc=$?
   [[ -s $OUT/$id.err ]] || rm -f "$OUT/$id.err"
   lines=$(wc -l <"$OUT/$id.txt")
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$RUN_ID" "$id" "$rc" "$lines" "$(date -u +%FT%TZ)" "$cmd" >>"$OUT/_steps.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$RUN_ID" "$id" "$rc" "$lines" "$(date -u +%FT%TZ)" "${cmd//$'\n'/\\n}" >>"$OUT/_steps.tsv"
   printf '%-24s rc=%-3s lines=%s\n' "$id" "$rc" "$lines"
 }

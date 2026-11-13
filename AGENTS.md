@@ -6,9 +6,9 @@ One researcher maintains it. Small and boring beats clever. The method is in `do
 
 ## Layout
 - `cli.py`, `orchestrator/`, `infra/`, `scenarios/`: executor. Produces `shared/experiments/<run_id>/`.
-- `examination/`: Bash scripts that examine one run. `lib.sh` defines `step`; every command goes through it.
+- `examination/`: logged `step` commands; `00_open.sh` mounts read-only at `/mnt/exam-<run_id>/{ewf,root}`, `99_close.sh` releases it.
 - `shared/experiments/<run_id>/dumps/`: evidence. Not in git.
-- `shared/experiments/<run_id>/investigation/`: `run.env`, `outputs/`, `scores.tsv`, `notes.md`.
+- `shared/experiments/<run_id>/investigation/`: `run.env` (offset, MNT, LOOPDEV), `outputs/`, `scores.tsv`, `notes.md`.
 
 Scenario keys for `cli.py run --scenario`: `user_ldpreload_father`, `user_procinj_ptracefa`,
 `kernel_lkm_diamorphine`, `kernel_ebpf_badbpf`, and `interactive_shell` (benign session, used as the control run).

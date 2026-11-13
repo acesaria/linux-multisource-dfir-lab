@@ -3,8 +3,8 @@
 . "$(dirname "$0")/lib.sh" "$@"; need_env
 F='-o "$OFFSET"'    # every Sleuth Kit call reads by path at the derived offset
 
-step FS01_fstab       "fcat $F /etc/fstab \"\$E01\""
-step FS01_timezone    "fcat $F /etc/timezone \"\$E01\""
+step FS01_fstab       'cat "$MNT/etc/fstab"'
+step FS01_timezone    'cat "$MNT/etc/timezone"'
 step FS02_fls         "fls -r -p $F \"\$E01\""
 step FS02_deleted     'grep -F "*" "$OUT/FS02_fls.txt"'
 step FS02_varlog      'grep -P "\tvar/log/[^/]+(/[^/]+)?$" "$OUT/FS02_fls.txt"'
@@ -13,10 +13,10 @@ step FS03_startup     'grep -P "\t(etc/(profile|bash\.bashrc)|etc/profile\.d/.+|
 step FS03_ssh_keys    'grep -P "\t(home/[^/]+|root)/\.ssh/authorized_keys2?$" "$OUT/FS02_fls.txt"'
 step FS03_tmp         'grep -P "\t(tmp|var/tmp|dev/shm)/" "$OUT/FS02_fls.txt"'
 step FS04_history     'grep -P "\t(home/[^/]+|root)/(\.[^/]*_history|\.viminfo|\.lesshst)$" "$OUT/FS02_fls.txt"'
-step FS04_accounts    "fcat $F /etc/passwd \"\$E01\" | grep -E 'sh\$'; fcat $F /etc/group \"\$E01\" | grep '^sudo:'"
-step FS04_authlog     "fcat $F /var/log/auth.log \"\$E01\" | grep -E 'Accepted|Failed|Invalid user|COMMAND=|useradd|usermod'"
-step FS04_journal     "rm -rf \"\$DATA/journal\"; tsk_recover -a -d \$(ifind -n /var/log/journal $F \"\$E01\") $F \"\$E01\" \"\$DATA/journal\" >/dev/null && journalctl -D \"\$DATA/journal\" -b -0 -o short-iso-precise -t sshd -t sudo -t systemd-logind"
-step FS04_wtmp        "fcat $F /var/log/wtmp \"\$E01\" > \"\$DATA/wtmp\" && last -F -f \"\$DATA/wtmp\""
-step FS05_preload     "fcat $F /etc/ld.so.preload \"\$E01\""
+step FS04_accounts    'grep -E "sh$" "$MNT/etc/passwd"; grep "^sudo:" "$MNT/etc/group"'
+step FS04_authlog     'sudo grep -E "Accepted|Failed|Invalid user|COMMAND=|useradd|usermod" "$MNT/var/log/auth.log"'
+step FS04_journal     'sudo journalctl -D "$MNT/var/log/journal" -b -0 -o short-iso-precise -t sshd -t sudo -t systemd-logind'
+step FS04_wtmp        'last -F -f "$MNT/var/log/wtmp"'
+step FS05_preload     'cat "$MNT/etc/ld.so.preload"'
 step T01_bodyfile     "fls -r -m / $F \"\$E01\""
 step T01_mactime      'mactime -d -y -b "$OUT/T01_bodyfile.txt"'
