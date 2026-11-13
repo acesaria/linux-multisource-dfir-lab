@@ -14,8 +14,8 @@ ramfile() { echo "mkdir -p \"\$DATA/ram/$1\"; $V linux.pagecache.Files --find $2
 step C_preload_disk      "fcat $F /etc/ld.so.preload \"\$E01\" | grep -F \"\$IMPLANT_CFG\""
 step C_preload_ram       "$(ramfile preload /etc/ld.so.preload) && grep -aF \"\$IMPLANT_CFG\" \"\$DATA/ram/preload\"/*.dmp"
 # implant_timestomp: mtime equals the reference mtime AND is older than the file's own creation time
-step C_timestomp_disk    "for p in \$IMPLANT \$REF; do i=\$(ifind -n \$p $F \"\$E01\"); [[ \$i =~ ^[0-9]+\$ ]] || exit 1; echo \"== \$p inode \$i\"; istat $F \"\$E01\" \$i | grep -E 'Modified|Created|Accessed'; done"
-step C_timestomp_ram     "$V linux.pagecache.Files --find \$IMPLANT; $V linux.pagecache.Files --find \$REF"
+step C_timestomp_disk    "(for p in \$IMPLANT \$REF; do i=\$(ifind -n \$p $F \"\$E01\"); [[ \$i =~ ^[0-9]+\$ ]] || exit 1; echo \"== \$p inode \$i\"; istat $F \"\$E01\" \$i | grep -E 'Modified|Created|Accessed' || exit; done) | awk -F'\t' '{print} /^File Modified:/{m[++n]=\$2} /^File Created:/{c[n]=\$2} END{exit !(n==2 && m[1]!=\"\" && m[1]==m[2] && c[1]>m[1])}'"
+step C_timestomp_ram     "($V linux.pagecache.Files --find \$IMPLANT && $V linux.pagecache.Files --find \$REF) | awk -F'\t' -v p=\"\$IMPLANT\" -v r=\"\$REF\" '{print} \$13==p{m=\$11; a=1} \$13==r{n=\$11; b=1} END{exit !(a && b && m!=\"\" && m==n)}'"
 # credential_staging: staged copy is byte-identical to /etc/shadow, mode 0600
 step C_harvest_disk      "a=\$(fcat $F \$HARVEST \"\$E01\" | sha256sum); b=\$(fcat $F /etc/shadow \"\$E01\" | sha256sum); echo \"\$a harvest\"; echo \"\$b shadow\"; grep -P \"\t\${HARVEST#/}\$\" \"\$OUT/FS02_fls.txt\" && [[ \$a == \"\$b\" ]]"
 step C_harvest_ram       "$(ramfile harvest \$HARVEST)"
